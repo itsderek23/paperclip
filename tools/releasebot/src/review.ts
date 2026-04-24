@@ -21,15 +21,18 @@ Consider the Playwright test source when judging — if the test clicked a menu 
 
 Return ONLY the JSON. No markdown fences.`;
 
-const SUMMARY_SYSTEM = `Write a <=400-character single-paragraph run summary for a human reviewer opening the comparison page.
+const SUMMARY_SYSTEM = `Write 1-3 sentences of narrative prose describing what the visual review actually observed across the PR's captured screenshots, for a human reviewer.
 
-The visual review (per-step verdicts: pass/intentional_change/fail) is the source of truth for whether this PR ships cleanly. Anchor the summary on those verdicts.
+The caller prepends a deterministic counts line to your output — DO NOT restate, cite, or embellish totals (no "3/3", "all three", "both sides", "after-side failures", etc). Your job is the narrative tail only: what changed on the page and whether it looks right.
 
-The Playwright assertion layer is a secondary signal. The user message gives you exact pass/fail counts for each side as "Facts". Treat those numbers as ground truth — do NOT invert, embellish, or restate them inaccurately. If "after_fails" is 0, the after side did not fail. Before-side assertion failures are EXPECTED when the test asserts on copy the PR introduced — do not flag them as regressions.
+If the run has any inconclusive verdicts (Playwright step failed so the screenshots aren't of the surface-under-test), lead with that caveat in plain user-facing language — e.g. "The planned flow didn't reach the page it was meant to exercise, so these screenshots can't tell us whether the PR works." Do not pretend those steps are a pass.
 
-After-side assertion failures are worth mentioning only if the visual review also flagged the step as fail.
-
-Start with the headline outcome (how many steps passed / were intentional_change / failed per the visual review), then what the visual review actually observed, then any caveat worth a reviewer's attention. Natural user-facing language — no code identifiers, no bulleted lists. End on a complete sentence. Return plain text only.`;
+Rules:
+- No code identifiers (method names, class names, file paths, CSS selectors, attribute names).
+- No bulleted lists, no step-by-step enumeration.
+- Natural user-facing language describing what a viewer would see.
+- End on a complete sentence.
+- Return plain text only. No markdown, no quotes, no headers.`;
 
 export async function reviewRun(
   pr: PrMeta,
@@ -46,11 +49,22 @@ export async function reviewRun(
     const stepN = idx + 1;
     const beforePng = before.steps[idx]?.screenshot;
     const afterPng = after.steps[idx]?.screenshot;
+    const beforeStatus = before.steps[idx]?.status;
+    const afterStatus = after.steps[idx]?.status;
     if (!beforePng || !afterPng) {
       stepReviews.push({
         step_n: stepN,
         verdict: "fail",
         observation: "Missing before or after screenshot.",
+      });
+      continue;
+    }
+    if (beforeStatus === "fail" && afterStatus === "fail") {
+      stepReviews.push({
+        step_n: stepN,
+        verdict: "inconclusive",
+        observation:
+          "Playwright step failed on both sides, so the screenshots show an error/default state rather than the surface-under-test. Cannot judge the PR from these captures — likely a hallucinated selector or a plan that doesn't match the actual UI.",
       });
       continue;
     }
@@ -149,20 +163,32 @@ async function summarize(
 ): Promise<string> {
   const beforeFails = before.steps.filter((s) => s.status === "fail").length;
   const afterFails = after.steps.filter((s) => s.status === "fail").length;
+  const beforePasses = before.steps.length - beforeFails;
+  const afterPasses = after.steps.length - afterFails;
   const visualCounts = {
     pass: steps.filter((s) => s.verdict === "pass").length,
     intentional_change: steps.filter((s) => s.verdict === "intentional_change").length,
     fail: steps.filter((s) => s.verdict === "fail").length,
+    inconclusive: steps.filter((s) => s.verdict === "inconclusive").length,
   };
+  const visualBits: string[] = [];
+  if (visualCounts.intentional_change) visualBits.push(`${visualCounts.intentional_change} intentional change`);
+  if (visualCounts.pass) visualBits.push(`${visualCounts.pass} unchanged`);
+  if (visualCounts.fail) visualBits.push(`${visualCounts.fail} visual fail`);
+  if (visualCounts.inconclusive) visualBits.push(`${visualCounts.inconclusive} inconclusive`);
+  const deterministicPrefix =
+    `${steps.length} step${steps.length === 1 ? "" : "s"}: ` +
+    (visualBits.length > 0 ? visualBits.join(", ") : "no verdicts") +
+    `. Playwright: ${beforePasses}/${before.steps.length} passed before, ${afterPasses}/${after.steps.length} passed after.`;
+
   const content = [
     `PR #${pr.number}: ${pr.title}`,
     `Body: ${pr.body.slice(0, 600)}`,
-    "Facts (ground truth — quote these numbers, do not invert):",
-    `  total_steps: ${steps.length}`,
-    `  visual_review: ${visualCounts.pass} pass, ${visualCounts.intentional_change} intentional_change, ${visualCounts.fail} fail`,
-    `  before_fails: ${beforeFails}/${before.steps.length} (expected — PR introduces new copy/routes)`,
-    `  after_fails: ${afterFails}/${after.steps.length}`,
-    `Per-step visual review detail: ${JSON.stringify(steps)}`,
+    "",
+    "Per-step visual review detail (what to narrate):",
+    JSON.stringify(steps, null, 2),
+    "",
+    `Counts prefix already written for you (do NOT restate): "${deterministicPrefix}"`,
   ].join("\n");
   const resp = await client.messages.create({
     model: MODEL,
@@ -170,11 +196,11 @@ async function summarize(
     system: SUMMARY_SYSTEM,
     messages: [{ role: "user", content }],
   });
-  const raw = resp.content
+  const narrative = resp.content
     .flatMap((b) => (b.type === "text" ? [b.text] : []))
     .join(" ")
     .trim();
-  return softTruncate(raw, 600);
+  return softTruncate(`${deterministicPrefix} ${narrative}`, 600);
 }
 
 function softTruncate(s: string, max: number): string {

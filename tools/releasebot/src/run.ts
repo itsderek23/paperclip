@@ -67,7 +67,7 @@ async function runPlaywright(opts: {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       process.execPath,
-      [playwrightCli, "test", "--config", opts.configPath, "--reporter=json,list"],
+      [playwrightCli, "test", "--config", opts.configPath],
       {
         cwd: opts.cwd,
         env: { ...process.env, ...opts.env },

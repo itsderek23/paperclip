@@ -41,7 +41,7 @@ export interface SideResult {
   steps: StepResult[];
 }
 
-export type Verdict = "pass" | "fail" | "intentional_change";
+export type Verdict = "pass" | "fail" | "intentional_change" | "inconclusive";
 
 export interface StepReview {
   step_n: number;
