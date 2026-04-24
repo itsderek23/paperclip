@@ -19,6 +19,8 @@ interface Args {
   planOnly: boolean;
   clean: boolean;
   reportOnly: boolean;
+  reviewOnly: boolean;
+  planFromCache: boolean;
   forceBroken: boolean;
 }
 
@@ -27,7 +29,9 @@ function parseArgs(argv: string[]): Args {
   const positional = argv.filter((a) => !a.startsWith("--"));
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--force-broken]");
+    console.error(
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken]",
+    );
     process.exit(2);
   }
   return {
@@ -37,6 +41,8 @@ function parseArgs(argv: string[]): Args {
     planOnly: flags.has("--plan-only"),
     clean: flags.has("--clean"),
     reportOnly: flags.has("--report-only"),
+    reviewOnly: flags.has("--review-only"),
+    planFromCache: flags.has("--plan-from-cache"),
     forceBroken: flags.has("--force-broken"),
   };
 }
@@ -58,6 +64,16 @@ async function main(): Promise<void> {
 
   if (args.reportOnly) {
     await regenerateReport(artifactsDir);
+    return;
+  }
+
+  if (args.reviewOnly) {
+    await rereviewFromCache(artifactsDir, apiKey);
+    return;
+  }
+
+  if (args.planFromCache) {
+    await replanFromCache(artifactsDir, apiKey);
     return;
   }
 
@@ -252,6 +268,45 @@ async function regenerateReport(artifactsDir: string): Promise<void> {
   const { markdownPath, htmlPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
   log(`  markdown: ${markdownPath}`);
   log(`  html:     ${htmlPath}`);
+}
+
+async function rereviewFromCache(artifactsDir: string, apiKey: string): Promise<void> {
+  log("re-running review + report from cached artifacts (no stacks, no Playwright)...");
+  const read = async (name: string): Promise<unknown> =>
+    JSON.parse(await fs.readFile(path.join(artifactsDir, name), "utf8"));
+  const pr = (await read("pr.json")) as Parameters<typeof reviewRun>[0];
+  const plan = (await read("plan.json")) as Plan;
+  const before = (await read(path.join("before", "steps.json"))) as Parameters<typeof reviewRun>[2];
+  const after = (await read(path.join("after", "steps.json"))) as Parameters<typeof reviewRun>[3];
+  log("  visual review...");
+  const review = await reviewRun(pr, plan, before, after, { apiKey });
+  await fs.writeFile(path.join(artifactsDir, "review.json"), JSON.stringify(review, null, 2));
+  log("  writing report...");
+  const { markdownPath, htmlPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
+  console.log("");
+  console.log(`  ${review.summary}`);
+  console.log("");
+  log(`  markdown: ${markdownPath}`);
+  log(`  html:     ${htmlPath}`);
+}
+
+async function replanFromCache(artifactsDir: string, apiKey: string): Promise<void> {
+  log("re-running plan from cached artifacts (no stacks, no Playwright)...");
+  const pr = JSON.parse(await fs.readFile(path.join(artifactsDir, "pr.json"), "utf8")) as Parameters<
+    typeof generatePlan
+  >[0];
+  const diff = await fs.readFile(path.join(artifactsDir, "diff.patch"), "utf8");
+  const sourceContext = await fs
+    .readFile(path.join(artifactsDir, "source-context.txt"), "utf8")
+    .catch(() => undefined);
+  const fixtures = await fs
+    .readFile(path.join(artifactsDir, "fixtures.before.json"), "utf8")
+    .then((raw) => JSON.parse(raw) as Parameters<typeof generatePlan>[2]["fixtures"])
+    .catch(() => undefined);
+  const plan = await generatePlan(pr, diff, { apiKey, sourceContext, fixtures });
+  await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
+  printPlan(plan);
+  log(`plan written to ${path.join(artifactsDir, "plan.json")}`);
 }
 
 async function dirSizeMb(dir: string): Promise<number> {
