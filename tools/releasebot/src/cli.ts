@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureShaReachable, fetchPrDiff, fetchPrMeta } from "./pr.ts";
-import { addWorktree, pnpmInstall } from "./worktree.ts";
+import { addWorktree, pnpmInstall, removeWorktree } from "./worktree.ts";
 import { PaperclipAdapter } from "./stack/paperclip.ts";
 import { generatePlan } from "./plan.ts";
 import { runPlanAgainst } from "./run.ts";
 import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
+import { gatherDiffContext } from "./diff-context.ts";
 import type { Plan, Side } from "./types.ts";
 
 interface Args {
@@ -16,6 +17,7 @@ interface Args {
   skipInstall: boolean;
   keepStacks: boolean;
   planOnly: boolean;
+  clean: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -23,7 +25,7 @@ function parseArgs(argv: string[]): Args {
   const positional = argv.filter((a) => !a.startsWith("--"));
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only]");
+    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean]");
     process.exit(2);
   }
   return {
@@ -31,6 +33,7 @@ function parseArgs(argv: string[]): Args {
     skipInstall: flags.has("--skip-install"),
     keepStacks: flags.has("--keep-stacks"),
     planOnly: flags.has("--plan-only"),
+    clean: flags.has("--clean"),
   };
 }
 
@@ -76,9 +79,19 @@ async function main(): Promise<void> {
     log("skipping pnpm install (--skip-install)");
   }
 
+  log("gathering source context around diff hunks...");
+  const sourceContext = await gatherDiffContext(diff, afterWt);
+  if (sourceContext) {
+    await fs.writeFile(path.join(artifactsDir, "source-context.txt"), sourceContext);
+    const hunkCount = (sourceContext.match(/^---\s/gm) ?? []).length;
+    log(`  ${hunkCount} hunk(s) of source context gathered (${sourceContext.length} chars)`);
+  } else {
+    log("  no UI-relevant hunks found; proceeding without source context");
+  }
+
   if (args.planOnly) {
     log("generating plan from diff (no fixtures, --plan-only)...");
-    const plan = await generatePlan(pr, diff, { apiKey });
+    const plan = await generatePlan(pr, diff, { apiKey, sourceContext });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
     log(`plan written to ${path.join(artifactsDir, "plan.json")}. Exiting (--plan-only).`);
@@ -128,7 +141,7 @@ async function main(): Promise<void> {
     }
 
     log("generating plan from diff...");
-    const plan = await generatePlan(pr, diff, { apiKey, fixtures });
+    const plan = await generatePlan(pr, diff, { apiKey, fixtures, sourceContext });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
 
@@ -160,6 +173,31 @@ async function main(): Promise<void> {
       log(`leaving stacks up: ${beforeStack.baseUrl} (before) / ${afterStack!.baseUrl} (after)`);
     }
   }
+
+  if (args.clean) {
+    if (args.keepStacks) {
+      log("--clean ignored (conflicts with --keep-stacks)");
+    } else {
+      log("cleaning worktrees (keeping artifacts/)...");
+      await Promise.allSettled([removeWorktree(beforeWt), removeWorktree(afterWt)]);
+      const sizeMb = await dirSizeMb(artifactsDir);
+      log(`  worktrees removed; artifacts/ retained (${sizeMb} MB)`);
+    }
+  }
+}
+
+async function dirSizeMb(dir: string): Promise<number> {
+  let total = 0;
+  async function walk(p: string): Promise<void> {
+    const entries = await fs.readdir(p, { withFileTypes: true }).catch(() => []);
+    for (const ent of entries) {
+      const abs = path.join(p, ent.name);
+      if (ent.isDirectory()) await walk(abs);
+      else if (ent.isFile()) total += (await fs.stat(abs).catch(() => ({ size: 0 }))).size;
+    }
+  }
+  await walk(dir);
+  return Math.round(total / (1024 * 1024));
 }
 
 function findRepoRoot(): string {
