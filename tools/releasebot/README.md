@@ -14,6 +14,7 @@ pnpm releasebot:pr 4224 --skip-install       # reuse existing worktrees (fails e
 pnpm releasebot:pr 4224 --keep-stacks        # leave servers running after report
 pnpm releasebot:pr 4224 --clean              # remove worktrees after run, keep artifacts/
 pnpm releasebot:pr 4224 --force-broken       # skip the upstream-CI preflight and run anyway
+pnpm releasebot:pr 4224 --force-no-ui        # skip the no-UI-surface triage and run anyway
 ```
 
 Artifacts land in `tmp/releasebot/<pr>/artifacts/`. Open `report.html` to see before/after pairs.
@@ -21,6 +22,14 @@ Artifacts land in `tmp/releasebot/<pr>/artifacts/`. Open `report.html` to see be
 ### Preflight: upstream CI
 
 Before spending time on worktrees + install + stack boots, the runner checks `gh pr view` for merge conflicts or failing checks (`verify`, `e2e`, etc.). If the PR is not buildable upstream, the run exits with code 3 and writes a `report.md` explaining the skip. Use `--force-broken` to override.
+
+### Triage: no browsable UI surface
+
+If the diff has zero `.tsx`/`.jsx` changes under `ui/`, there's no surface a visual QA run can exercise. The runner exits with code 3 and writes a `report.md` flagging the skip rather than letting the planner scope-drift onto some incidental UI hunk. Use `--force-no-ui` to override.
+
+### Planner: grounded selectors with auto-retry
+
+After the LLM produces a plan, the runner statically extracts every Playwright locator literal (`getByRole(... { name })`, `getByText`, `getByLabel`, `[data-testid]`, `[aria-label]`, etc.) and probes each against `source-context.txt` and the rendered values from `fixtures.before.json`. If any selector doesn't appear in either, the plan is regenerated once with explicit feedback naming the offending strings. After one retry, ungrounded selectors are logged as a warning and the run proceeds — the visual review will mark steps inconclusive at runtime if Playwright cannot find them.
 
 ### Stack-boot failure reports
 
