@@ -19,11 +19,12 @@ Available write endpoints (local_trusted, no auth required). Use ONLY these — 
     body: {
       title: string,
       description?: string,
-      blockedByIssueIds?: string[],      // note: not "blockedBy"
-      parentIssueId?: string,             // note: not "parentId"
+      blockedByIssueIds?: string[],      // array of UUIDs of blocker issues
+      parentId?: string,                  // UUID of parent issue (NOT "parentIssueId")
     }
     response: { id: string, identifier: string, ... }
     Capture: id AND identifier. URLs use the identifier: /issues/<identifier>.
+    Unknown fields are silently dropped — use EXACTLY these names.
 
   POST /api/issues/:issueId/comments
     body: { body: string }
@@ -199,7 +200,21 @@ async function executeSpec(baseUrl: string, spec: FixtureSpec): Promise<FixtureS
       }
       const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       const values = capture(entity, payload);
-      summary[entity.name] = { values };
+      // Also carry through a few body fields the planner LLM needs to write
+      // exact locators against: title/name. Avoids forcing the seed LLM to
+      // remember to capture them, and prevents the planner from hallucinating
+      // titles when writing expect(locator).toHaveText(...) / aria-label matches.
+      const bodyObj = body as Record<string, unknown>;
+      for (const key of ["title", "name"]) {
+        if (!(key in values) && typeof bodyObj[key] === "string") {
+          values[key] = bodyObj[key] as string;
+        }
+      }
+      // Relationship annotations — the planner needs to know which issue blocks
+      // which and which has a parent, so it can pick a URL that actually exercises
+      // the feature under test.
+      const note = formatRelationships(bodyObj, summary);
+      summary[entity.name] = note ? { values, note } : { values };
     } catch (err) {
       summary[entity.name] = { values: {}, note: `error: ${(err as Error).message}` };
     }
@@ -211,6 +226,30 @@ function parseEndpoint(s: string): { method: string; url: string } {
   const m = s.match(/^([A-Z]+)\s+(.+)$/);
   if (!m) throw new Error(`Bad endpoint: ${s}`);
   return { method: m[1], url: m[2] };
+}
+
+function formatRelationships(body: Record<string, unknown>, summary: FixtureSummary): string | undefined {
+  const parts: string[] = [];
+  const parentId = typeof body.parentId === "string" ? body.parentId : undefined;
+  if (parentId) {
+    const parent = resolveIdentifier(summary, parentId);
+    if (parent) parts.push(`parent=${parent}`);
+  }
+  const blockedByIds = Array.isArray(body.blockedByIssueIds)
+    ? (body.blockedByIssueIds as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  if (blockedByIds.length > 0) {
+    const idents = blockedByIds.map((id) => resolveIdentifier(summary, id)).filter(Boolean);
+    if (idents.length > 0) parts.push(`blockedBy=[${idents.join(",")}]`);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+function resolveIdentifier(summary: FixtureSummary, id: string): string | undefined {
+  for (const entry of Object.values(summary)) {
+    if (entry.values.id === id) return entry.values.identifier ?? entry.values.id;
+  }
+  return undefined;
 }
 
 function capture(entity: FixtureSpecEntity, payload: Record<string, unknown>): Record<string, string> {

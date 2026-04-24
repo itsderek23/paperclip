@@ -25,23 +25,29 @@ Output schema (strict, return ONLY this JSON object — no markdown fences, no c
 The spec body is injected into a file that already has these imports and hooks in scope:
 
     import { test, expect } from "@playwright/test";
-    import { annotate } from "<absolute path>";
+    import { markAnnotations } from "<absolute path>";
     const SCREENSHOT_DIR = process.env.RELEASEBOT_SCREENSHOT_DIR ?? ".";
 
-    // An afterEach hook is auto-injected that takes step-NN.png at the END of every test,
-    // EVEN IF the test failed. So you do NOT need to call page.screenshot() yourself.
+    // An afterEach hook is auto-injected that:
+    //   1. reads the selectors registered via markAnnotations(...) at the top of the test,
+    //   2. draws red outlines over each match,
+    //   3. takes step-NN.png.
+    // All three happen regardless of whether the test body threw — so even a
+    // failing expect() still yields an annotated screenshot.
 
 Do NOT include imports, SCREENSHOT_DIR, test.afterEach, or test.describe.configure in your spec body — they are provided. Just emit the test(...) calls, in order.
 
 Each test() MUST follow this skeleton:
 
     test("step-NN · <short description>", async ({ page }) => {
+      markAnnotations([/* 1-4 CSS selectors to outline */]);   // FIRST line of the body
       await page.goto("<relative URL>");
       // interactions: locator.click(), .fill(), .hover(), keyboard.press(), etc., as needed
       // assertions: await expect(locator).toBeVisible(); // or .toHaveText, .toHaveAttribute, etc.
-      await annotate(page, [/* 1-4 CSS selectors to outline */]);
-      // NO page.screenshot — the harness takes one in afterEach.
+      // NO annotate() call. NO page.screenshot — the harness handles both.
     });
+
+markAnnotations() MUST be the FIRST statement in every test body. Calling it up-front means the afterEach hook can still draw outlines even if a subsequent expect() throws, which is exactly what we want for debugging.
 
 Rules:
 
@@ -51,7 +57,7 @@ Rules:
 - For text the PR introduced that lives behind an interaction (menu button, tab, drawer, popover, dialog trigger) — click the trigger FIRST, then assert on the new text. This is the common case.
 - ONLY assert on things the diff actually introduces or modifies. Do NOT add "sanity" assertions on generic page structure (h1 presence, navbar links, etc.) — the diff didn't touch those, they're not a PR signal, and a failing sanity assertion halts the rest of the test. Aim for one assertion per test, the tightest possible to the diff.
 - Pick expect targets that are specific to the diff — new copy, new data-* attributes, new component names. Never something that would also appear on a login/404/empty-state screen.
-- Annotate selectors should target DOM nodes the diff introduced or modified. Use stable selectors (role, aria-label, data-testid). Call annotate() as the FINAL line of the test body. Every match of each selector is outlined — if a selector matches multiple elements (e.g. an aria-label that appears on both an inline ref and a sidebar pill), all matches get boxed with the same label number, which is usually what you want. If you specifically want to point at ONE region, scope the selector: prefix with a container selector like \`aside a[...]\`, \`[data-testid="issue-properties"] a\`, or similar.
+- Annotate selectors (passed to markAnnotations()) should target DOM nodes the diff introduced or modified. Use stable selectors (role, aria-label, data-testid). Every match of each selector is outlined — if a selector matches multiple elements (e.g. an aria-label that appears on both an inline ref and a sidebar pill), all matches get boxed with the same label number, which is usually what you want. If you specifically want to point at ONE region, scope the selector: prefix with a container selector like \`aside a[...]\`, \`[data-testid="issue-properties"] a\`, or similar.
 - 2 to 6 steps. Each test should be a complete, isolated scenario — no shared state between tests (each gets a fresh page).
 - NO page.waitForTimeout, NO arbitrary setTimeout, NO page.evaluate unless genuinely necessary. Rely on Playwright's auto-wait via expect() and locator actions.
 - The stack boots in local_trusted mode with no sign-in — no auth flows needed.
@@ -131,7 +137,8 @@ function renderFixtures(summary: FixtureSummary): string {
     const fields = Object.entries(entry.values)
       .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
       .join(", ");
-    lines.push(`- ${name}: ${fields}`);
+    const suffix = entry.note ? ` — ${entry.note}` : "";
+    lines.push(`- ${name}: ${fields}${suffix}`);
   }
   if (lines.length === 0) return "";
   lines.push("");

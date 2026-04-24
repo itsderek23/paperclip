@@ -29,11 +29,13 @@ function renderSpec(body: string, annotateImport: string): string {
   // screenshot for EVERY step. With workers:1 in the config, tests still run
   // one at a time in file order; we just don't want failure to cascade.
   //
-  // The afterEach hook guarantees a screenshot lands at step-NN.png even if an
-  // earlier line in the test body threw (e.g. a failing expect). The LLM's test
-  // body does NOT need to call page.screenshot() itself — only annotate().
+  // The afterEach hook both draws annotations (from markAnnotations() calls
+  // made at the top of the test body) AND takes the screenshot, so both
+  // happen even when a test threw mid-body. The test body calls
+  // markAnnotations([...]) up front; it does NOT call annotate() or
+  // page.screenshot() itself.
   return `import { test, expect } from "@playwright/test";
-import { annotate } from "${annotateImport}";
+import { annotate, markAnnotations, readMarkedAnnotations } from "${annotateImport}";
 
 const SCREENSHOT_DIR = process.env.RELEASEBOT_SCREENSHOT_DIR ?? ".";
 
@@ -42,11 +44,16 @@ test.afterEach(async ({ page }, testInfo) => {
   if (!m) return;
   const file = \`\${SCREENSHOT_DIR}/step-\${m[1]}.png\`;
   try {
+    const selectors = readMarkedAnnotations(testInfo);
+    if (selectors.length > 0) await annotate(page, selectors);
     await page.screenshot({ path: file });
   } catch {
     // page may be closed if test aborted early; best-effort only.
   }
 });
+
+// Prevent unused-import warnings if the generated body omits these.
+void markAnnotations;
 
 ${body.trim()}
 `;

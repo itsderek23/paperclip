@@ -1,6 +1,41 @@
-import type { Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 
 const MAX_MATCHES_PER_SELECTOR = 20;
+
+const ANNOTATION_TYPE = "releasebot-annotate";
+
+/**
+ * Register the selectors to outline on this test's screenshot. Call at the TOP
+ * of a test body (right after the test declaration), BEFORE any expect() —
+ * so even if an assertion later throws, the harness's afterEach can still
+ * draw outlines before taking the screenshot.
+ *
+ * The selectors are stashed in the test's annotations array; the generated
+ * spec's afterEach hook reads them and calls annotate(page, selectors) just
+ * before page.screenshot().
+ */
+export function markAnnotations(selectors: string[]): void {
+  test.info().annotations.push({
+    type: ANNOTATION_TYPE,
+    description: JSON.stringify(selectors),
+  });
+}
+
+/** Used by the generated spec's afterEach to recover the registered selectors. */
+export function readMarkedAnnotations(
+  testInfo: { annotations: Array<{ type: string; description?: string }> },
+): string[] {
+  for (const a of testInfo.annotations) {
+    if (a.type !== ANNOTATION_TYPE) continue;
+    try {
+      const parsed = JSON.parse(a.description ?? "[]");
+      if (Array.isArray(parsed)) return parsed.filter((s): s is string => typeof s === "string");
+    } catch {
+      // fall through
+    }
+  }
+  return [];
+}
 
 /**
  * Draws red outline overlays around every match of each selector and labels
