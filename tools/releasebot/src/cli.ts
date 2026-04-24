@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureShaReachable, fetchPrDiff, fetchPrMeta } from "./pr.ts";
+import { ensureShaReachable, fetchPrCiSummary, fetchPrDiff, fetchPrMeta } from "./pr.ts";
 import { addWorktree, pnpmInstall, removeWorktree } from "./worktree.ts";
 import { PaperclipAdapter } from "./stack/paperclip.ts";
 import { generatePlan } from "./plan.ts";
@@ -19,6 +19,7 @@ interface Args {
   planOnly: boolean;
   clean: boolean;
   reportOnly: boolean;
+  forceBroken: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -26,7 +27,7 @@ function parseArgs(argv: string[]): Args {
   const positional = argv.filter((a) => !a.startsWith("--"));
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only]");
+    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--force-broken]");
     process.exit(2);
   }
   return {
@@ -36,6 +37,7 @@ function parseArgs(argv: string[]): Args {
     planOnly: flags.has("--plan-only"),
     clean: flags.has("--clean"),
     reportOnly: flags.has("--report-only"),
+    forceBroken: flags.has("--force-broken"),
   };
 }
 
@@ -66,6 +68,32 @@ async function main(): Promise<void> {
   await fs.writeFile(path.join(artifactsDir, "diff.patch"), diff);
   log(`  ${pr.title}`);
   log(`  base ${pr.baseSha.slice(0, 7)} · head ${pr.headSha.slice(0, 7)}`);
+
+  log("checking upstream CI status...");
+  try {
+    const ci = await fetchPrCiSummary(args.prNumber);
+    if (ci.failingChecks.length > 0 || ci.mergeable === "CONFLICTING") {
+      const bits: string[] = [];
+      if (ci.mergeable === "CONFLICTING") bits.push("merge conflicts");
+      if (ci.failingChecks.length > 0) {
+        bits.push(`failing checks: ${ci.failingChecks.map((c) => c.name).join(", ")}`);
+      }
+      log(`  ⚠ upstream issues: ${bits.join("; ")}`);
+      if (!args.forceBroken) {
+        console.error(
+          `releasebot: PR #${args.prNumber} has ${bits.join(" and ")}; the after-side stack is likely to fail to build.`,
+        );
+        console.error("Re-run with --force-broken to proceed anyway.");
+        await writePreflightFailureReport(artifactsDir, pr, ci);
+        process.exit(3);
+      }
+      log("  proceeding anyway (--force-broken)");
+    } else {
+      log("  upstream CI green; no conflicts");
+    }
+  } catch (err) {
+    log(`  skipped (could not fetch CI status: ${(err as Error).message})`);
+  }
 
   log("ensuring SHAs are reachable...");
   await ensureShaReachable(pr.baseSha, args.prNumber);
@@ -124,12 +152,19 @@ async function main(): Promise<void> {
   const afterPort = 3302;
 
   log(`booting stack (before) on :${beforePort}...`);
-  const beforeStack = await adapter.boot(beforeWt, beforePort, beforeHome);
+  let beforeStack;
+  try {
+    beforeStack = await adapter.boot(beforeWt, beforePort, beforeHome);
+  } catch (err) {
+    await writeBootFailureReport(artifactsDir, pr, "before", beforeWt, err as Error);
+    throw err;
+  }
   let afterStack;
   try {
     log(`booting stack (after) on :${afterPort}...`);
     afterStack = await adapter.boot(afterWt, afterPort, afterHome);
   } catch (err) {
+    await writeBootFailureReport(artifactsDir, pr, "after", afterWt, err as Error);
     await beforeStack.shutdown();
     throw err;
   }
@@ -267,6 +302,71 @@ function printSummary(plan: Plan, review: { summary: string; steps: Array<{ verd
   console.log(`  markdown: ${md}`);
   console.log(`  html:     ${html}`);
   console.log("");
+}
+
+async function writePreflightFailureReport(
+  artifactsDir: string,
+  pr: { number: number; title: string; url: string; baseSha: string; headSha: string },
+  ci: { mergeable: string; failingChecks: { name: string; detailsUrl: string }[] },
+): Promise<void> {
+  const lines: string[] = [];
+  lines.push(`# releasebot — PR #${pr.number}: skipped`);
+  lines.push("");
+  lines.push(`**${pr.title}**  `);
+  lines.push(`${pr.url}  `);
+  lines.push(`base: \`${pr.baseSha.slice(0, 7)}\` · head: \`${pr.headSha.slice(0, 7)}\`  `);
+  lines.push("");
+  lines.push("## Preflight skipped this run");
+  lines.push("");
+  lines.push("releasebot did not build or execute this PR because upstream CI shows it is not in a buildable state.");
+  lines.push("");
+  if (ci.mergeable === "CONFLICTING") {
+    lines.push("- Merge conflicts with the base branch.");
+  }
+  for (const c of ci.failingChecks) {
+    lines.push(`- Failing check: \`${c.name}\`${c.detailsUrl ? ` — ${c.detailsUrl}` : ""}`);
+  }
+  lines.push("");
+  lines.push("Re-run with `--force-broken` to attempt the run anyway.");
+  lines.push("");
+  await fs.writeFile(path.join(artifactsDir, "report.md"), lines.join("\n"));
+}
+
+async function writeBootFailureReport(
+  artifactsDir: string,
+  pr: { number: number; title: string; url: string; baseSha: string; headSha: string },
+  side: Side,
+  worktreePath: string,
+  err: Error,
+): Promise<void> {
+  const bootLog = path.join(worktreePath, side === "before" ? "boot-3301.log" : "boot-3302.log");
+  let tail = "";
+  try {
+    const raw = await fs.readFile(bootLog, "utf8");
+    tail = raw.split("\n").slice(-40).join("\n");
+  } catch {
+    tail = "(boot log not available)";
+  }
+  const lines: string[] = [];
+  lines.push(`# releasebot — PR #${pr.number}: stack boot failed (${side})`);
+  lines.push("");
+  lines.push(`**${pr.title}**  `);
+  lines.push(`${pr.url}  `);
+  lines.push(`base: \`${pr.baseSha.slice(0, 7)}\` · head: \`${pr.headSha.slice(0, 7)}\`  `);
+  lines.push("");
+  lines.push(`## The ${side}-side stack failed to boot`);
+  lines.push("");
+  lines.push("No plan was executed; no screenshots were captured.");
+  lines.push("");
+  lines.push(`**Error:** ${err.message.split("\n")[0]}`);
+  lines.push("");
+  lines.push(`**Boot log tail** (\`${path.relative(path.dirname(artifactsDir), bootLog)}\`):`);
+  lines.push("");
+  lines.push("```");
+  lines.push(tail);
+  lines.push("```");
+  lines.push("");
+  await fs.writeFile(path.join(artifactsDir, "report.md"), lines.join("\n"));
 }
 
 main().catch((err) => {

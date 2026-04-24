@@ -37,6 +37,29 @@ export async function fetchPrDiff(prNumber: number): Promise<string> {
   return stdout;
 }
 
+export interface PrCiSummary {
+  mergeable: string;
+  failingChecks: { name: string; detailsUrl: string }[];
+}
+
+export async function fetchPrCiSummary(prNumber: number): Promise<PrCiSummary> {
+  const { stdout } = await execFile("gh", [
+    "pr",
+    "view",
+    String(prNumber),
+    "--json",
+    "mergeable,statusCheckRollup",
+  ]);
+  const raw = JSON.parse(stdout) as {
+    mergeable: string;
+    statusCheckRollup: { name?: string; conclusion?: string | null; detailsUrl?: string }[];
+  };
+  const failingChecks = (raw.statusCheckRollup ?? [])
+    .filter((c) => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT" || c.conclusion === "CANCELLED")
+    .map((c) => ({ name: c.name ?? "unknown", detailsUrl: c.detailsUrl ?? "" }));
+  return { mergeable: raw.mergeable, failingChecks };
+}
+
 export async function ensureShaReachable(sha: string, prNumber: number): Promise<void> {
   try {
     await execFile("git", ["cat-file", "-e", sha]);
