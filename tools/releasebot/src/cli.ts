@@ -6,6 +6,7 @@ import { ensureShaReachable, fetchPrCiSummary, fetchPrDiff, fetchPrMeta } from "
 import { addWorktree, pnpmInstall, removeWorktree } from "./worktree.ts";
 import { PaperclipAdapter } from "./stack/paperclip.ts";
 import { generatePlan } from "./plan.ts";
+import { extractSelectors, findUngroundedSelectors } from "./plan-validate.ts";
 import { runPlanAgainst } from "./run.ts";
 import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
@@ -22,6 +23,7 @@ interface Args {
   reviewOnly: boolean;
   planFromCache: boolean;
   forceBroken: boolean;
+  forceNoUi: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -30,7 +32,7 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
@@ -44,6 +46,7 @@ function parseArgs(argv: string[]): Args {
     reviewOnly: flags.has("--review-only"),
     planFromCache: flags.has("--plan-from-cache"),
     forceBroken: flags.has("--force-broken"),
+    forceNoUi: flags.has("--force-no-ui"),
   };
 }
 
@@ -148,13 +151,21 @@ async function main(): Promise<void> {
     await fs.writeFile(path.join(artifactsDir, "source-context.txt"), sourceContext);
     const hunkCount = (sourceContext.match(/^---\s/gm) ?? []).length;
     log(`  ${hunkCount} hunk(s) of source context gathered (${sourceContext.length} chars)`);
+  } else if (args.forceNoUi) {
+    log("  no UI-relevant hunks found; proceeding anyway (--force-no-ui)");
   } else {
-    log("  no UI-relevant hunks found; proceeding without source context");
+    log("  no UI-relevant hunks found");
+    console.error(
+      `releasebot: PR #${args.prNumber} has no UI-relevant hunks (no .tsx/.jsx changes under ui/).`,
+    );
+    console.error("There is no browsable surface to QA. Re-run with --force-no-ui to proceed anyway.");
+    await writeNoUiSurfaceReport(artifactsDir, pr);
+    process.exit(3);
   }
 
   if (args.planOnly) {
     log("generating plan from diff (no fixtures, --plan-only)...");
-    const plan = await generatePlan(pr, diff, { apiKey, sourceContext });
+    const plan = await planWithGroundingRetry(pr, diff, { apiKey, sourceContext });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
     log(`plan written to ${path.join(artifactsDir, "plan.json")}. Exiting (--plan-only).`);
@@ -211,7 +222,7 @@ async function main(): Promise<void> {
     }
 
     log("generating plan from diff...");
-    const plan = await generatePlan(pr, diff, { apiKey, fixtures, sourceContext });
+    const plan = await planWithGroundingRetry(pr, diff, { apiKey, fixtures, sourceContext });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
 
@@ -303,7 +314,7 @@ async function replanFromCache(artifactsDir: string, apiKey: string): Promise<vo
     .readFile(path.join(artifactsDir, "fixtures.before.json"), "utf8")
     .then((raw) => JSON.parse(raw) as Parameters<typeof generatePlan>[2]["fixtures"])
     .catch(() => undefined);
-  const plan = await generatePlan(pr, diff, { apiKey, sourceContext, fixtures });
+  const plan = await planWithGroundingRetry(pr, diff, { apiKey, sourceContext, fixtures });
   await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
   printPlan(plan);
   log(`plan written to ${path.join(artifactsDir, "plan.json")}`);
@@ -383,6 +394,69 @@ async function writePreflightFailureReport(
   }
   lines.push("");
   lines.push("Re-run with `--force-broken` to attempt the run anyway.");
+  lines.push("");
+  await fs.writeFile(path.join(artifactsDir, "report.md"), lines.join("\n"));
+}
+
+async function planWithGroundingRetry(
+  pr: Parameters<typeof generatePlan>[0],
+  diff: string,
+  options: Parameters<typeof generatePlan>[2],
+): Promise<Plan> {
+  const plan = await generatePlan(pr, diff, options);
+  if (!options.sourceContext) return plan;
+
+  const haystack = buildGroundingHaystack(options.sourceContext, options.fixtures);
+  const selectors = extractSelectors(plan.spec);
+  const ungrounded = findUngroundedSelectors(selectors, haystack);
+  if (ungrounded.length === 0) return plan;
+
+  log(`  ⚠ ${ungrounded.length} ungrounded selector(s) in plan: ${ungrounded.map((s) => JSON.stringify(s)).join(", ")}`);
+  log("  retrying plan generation with selector feedback...");
+  const retried = await generatePlan(pr, diff, { ...options, retryFeedback: ungrounded });
+  const stillUngrounded = findUngroundedSelectors(extractSelectors(retried.spec), haystack);
+  if (stillUngrounded.length === 0) {
+    log("  retry succeeded — all selectors are grounded.");
+    return retried;
+  }
+  log(
+    `  ⚠ retry still has ${stillUngrounded.length} ungrounded selector(s): ${stillUngrounded
+      .map((s) => JSON.stringify(s))
+      .join(", ")}. Proceeding; the visual review will mark steps inconclusive if Playwright cannot find them.`,
+  );
+  return retried;
+}
+
+function buildGroundingHaystack(sourceContext: string, fixtures: Parameters<typeof generatePlan>[2]["fixtures"]): string {
+  if (!fixtures) return sourceContext;
+  const fixtureValues: string[] = [];
+  for (const entry of Object.values(fixtures)) {
+    for (const v of Object.values(entry.values)) {
+      if (typeof v === "string") fixtureValues.push(v);
+      else fixtureValues.push(JSON.stringify(v));
+    }
+  }
+  return sourceContext + "\n" + fixtureValues.join("\n");
+}
+
+async function writeNoUiSurfaceReport(
+  artifactsDir: string,
+  pr: { number: number; title: string; url: string; baseSha: string; headSha: string },
+): Promise<void> {
+  const lines: string[] = [];
+  lines.push(`# releasebot — PR #${pr.number}: skipped`);
+  lines.push("");
+  lines.push(`**${pr.title}**  `);
+  lines.push(`${pr.url}  `);
+  lines.push(`base: \`${pr.baseSha.slice(0, 7)}\` · head: \`${pr.headSha.slice(0, 7)}\`  `);
+  lines.push("");
+  lines.push("## No browsable UI surface in this PR");
+  lines.push("");
+  lines.push(
+    "releasebot found no `.tsx`/`.jsx` changes under `ui/` in this PR. There is no browsable surface a visual QA run could exercise — most likely a backend, infra, docs, or skill-markdown change.",
+  );
+  lines.push("");
+  lines.push("Re-run with `--force-no-ui` to attempt the run anyway (the planner will likely scope-drift to incidental UI hunks).");
   lines.push("");
   await fs.writeFile(path.join(artifactsDir, "report.md"), lines.join("\n"));
 }

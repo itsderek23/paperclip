@@ -67,7 +67,12 @@ Keep the spec body clean and human-readable — a reviewer should be able to rea
 export async function generatePlan(
   pr: PrMeta,
   diff: string,
-  options: { apiKey: string; fixtures?: FixtureSummary; sourceContext?: string },
+  options: {
+    apiKey: string;
+    fixtures?: FixtureSummary;
+    sourceContext?: string;
+    retryFeedback?: string[];
+  },
 ): Promise<Plan> {
   const client = new Anthropic({ apiKey: options.apiKey });
   const truncatedDiff = diff.length > MAX_DIFF_CHARS ? diff.slice(0, MAX_DIFF_CHARS) + "\n\n... (diff truncated)" : diff;
@@ -91,6 +96,14 @@ export async function generatePlan(
           "Source context around each diff hunk (post-PR state — use these EXACT aria-label / role-name / data-testid / button text values in your Playwright locators; do NOT guess):",
           "",
           options.sourceContext,
+          "",
+        ]
+      : []),
+    ...(options.retryFeedback && options.retryFeedback.length > 0
+      ? [
+          "Previous attempt used these selectors/literals that do NOT appear in the source context above:",
+          ...options.retryFeedback.map((s) => `  - ${s}`),
+          "Revise the plan: replace each with a value that is present in the source context, or drop the step entirely. Do not invent UI affordances that aren't in the source.",
           "",
         ]
       : []),
