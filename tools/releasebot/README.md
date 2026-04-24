@@ -10,11 +10,35 @@ Scope: proof of concept, local-only, not wired into CI. See `/Users/derek/.claud
 # Requires: gh auth status working, .env.local with ANTHROPIC_API_KEY at repo root
 pnpm releasebot:pr 4224
 pnpm releasebot:pr 4224 --plan-only          # stop after plan generation
-pnpm releasebot:pr 4224 --skip-install       # reuse existing worktrees
+pnpm releasebot:pr 4224 --skip-install       # reuse existing worktrees (fails early if node_modules missing)
 pnpm releasebot:pr 4224 --keep-stacks        # leave servers running after report
+pnpm releasebot:pr 4224 --clean              # remove worktrees after run, keep artifacts/
+pnpm releasebot:pr 4224 --force-broken       # skip the upstream-CI preflight and run anyway
 ```
 
 Artifacts land in `tmp/releasebot/<pr>/artifacts/`. Open `report.html` to see before/after pairs.
+
+### Preflight: upstream CI
+
+Before spending time on worktrees + install + stack boots, the runner checks `gh pr view` for merge conflicts or failing checks (`verify`, `e2e`, etc.). If the PR is not buildable upstream, the run exits with code 3 and writes a `report.md` explaining the skip. Use `--force-broken` to override.
+
+### Stack-boot failure reports
+
+When either side's Paperclip stack fails to boot (install issue, TypeScript build error, port conflict), a `report.md` is written with the failing side, the error message, and the last 40 lines of the boot log — so failed runs leave an audit trail instead of only stderr.
+
+### Fast iteration on LLM stages
+
+Full runs take ~5 minutes. The plan and review stages are pure functions of cached artifacts, so two flags let you re-enter them directly without worktrees, installs, stacks, or Playwright:
+
+```
+pnpm releasebot:pr 4224 --review-only        # re-run visual review + report, ~20-40s
+pnpm releasebot:pr 4224 --plan-from-cache    # re-run planner, write a new plan.json, ~10-15s
+pnpm releasebot:pr 4224 --report-only        # re-render report from existing review.json
+```
+
+`--review-only` reads `plan.json`, `before/steps.json`, `after/steps.json`, and the step-*.png screenshots; writes a fresh `review.json`, `report.md`, `report.html`. Use when iterating on the reviewer or summary prompts in `review.ts`.
+
+`--plan-from-cache` reads `pr.json`, `diff.patch`, `source-context.txt`, and `fixtures.before.json`; writes a fresh `plan.json`. Use when iterating on the planner prompt in `plan.ts`. Behavioral validation of the new plan still requires a live run.
 
 ## Layout
 
