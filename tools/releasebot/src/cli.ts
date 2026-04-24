@@ -175,14 +175,13 @@ function log(msg: string): void {
 
 function printPlan(plan: Plan): void {
   console.log("");
-  console.log(`  Title: ${plan.title}`);
-  console.log(`  Goal:  ${plan.goal}`);
-  console.log(`  Rationale: ${plan.rationale}`);
+  console.log(`  Title: ${plan.metadata.title}`);
+  console.log(`  Goal:  ${plan.metadata.goal}`);
+  console.log(`  Rationale: ${plan.metadata.rationale}`);
   console.log(`  Steps:`);
-  for (const [i, s] of plan.steps.entries()) {
+  for (const [i, s] of plan.metadata.steps.entries()) {
     console.log(`    ${i + 1}. ${s.description}`);
-    console.log(`       ${s.url} · assert "${s.assert_contains}"`);
-    if (s.annotate?.length) console.log(`       annotate: ${s.annotate.join(", ")}`);
+    console.log(`       ${s.url}`);
   }
   console.log("");
 }
@@ -191,7 +190,7 @@ function printSummary(plan: Plan, review: { summary: string; steps: Array<{ verd
   const counts: Record<string, number> = {};
   for (const s of review.steps) counts[s.verdict] = (counts[s.verdict] ?? 0) + 1;
   console.log("");
-  console.log(`  ${plan.steps.length} step(s): ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")}`);
+  console.log(`  ${plan.metadata.steps.length} step(s): ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")}`);
   console.log(`  ${review.summary}`);
   console.log("");
   console.log(`  markdown: ${md}`);

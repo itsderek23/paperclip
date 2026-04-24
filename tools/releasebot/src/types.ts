@@ -7,19 +7,23 @@ export interface PrMeta {
   headSha: string;
 }
 
-export interface PlanStep {
+export interface PlanStepMetadata {
   description: string;
   url: string;
-  assert_contains: string;
-  annotate?: string[];
-  full_page?: boolean;
 }
 
-export interface Plan {
+export interface PlanMetadata {
   title: string;
   goal: string;
   rationale: string;
-  steps: PlanStep[];
+  steps: PlanStepMetadata[];
+}
+
+export interface Plan {
+  metadata: PlanMetadata;
+  /** Body of the generated Playwright spec: one `test(...)` per step, in order.
+   * We wrap this with imports + describe boilerplate at write time. */
+  spec: string;
 }
 
 export type Side = "before" | "after";

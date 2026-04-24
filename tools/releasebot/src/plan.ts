@@ -1,33 +1,62 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { FixtureSummary, Plan, PrMeta } from "./types.ts";
+import type { FixtureSummary, Plan, PlanMetadata, PlanStepMetadata, PrMeta } from "./types.ts";
 
 const MODEL = "claude-opus-4-7";
 const MAX_DIFF_CHARS = 180_000;
 
 const SYSTEM_PROMPT = `You are writing a throwaway browser-QA plan for a single GitHub PR against a Paperclip webapp.
 
-Output strict JSON matching this TypeScript schema:
+You produce two things in a single JSON object: structured metadata + the body of a Playwright test spec.
 
-type Plan = {
-  title: string;          // <=60 chars, feature/scenario name
-  goal: string;           // 1 sentence QA-spec prose
-  rationale: string;      // 2-4 sentences tying each step to the diff
-  steps: PlanStep[];      // 2 to 6 steps
-};
-type PlanStep = {
-  description: string;    // <=90 chars, what this step does in reviewer prose
-  url: string;            // RELATIVE path, starts with "/"
-  assert_contains: string;// substring that must appear on the rendered page, SPECIFIC to the diff
-  annotate?: string[];    // 1-4 CSS selectors to outline in the screenshot; pick nodes the diff introduced/modified
-  full_page?: boolean;    // default false
-};
+Output schema (strict, return ONLY this JSON object — no markdown fences, no commentary):
+
+{
+  "metadata": {
+    "title": string,                         // <=60 chars, feature/scenario name
+    "goal": string,                          // 1 sentence QA-spec prose
+    "rationale": string,                     // 2-4 sentences tying each step to the diff
+    "steps": [
+      { "description": string, "url": string }   // one entry per test() in the spec, in order
+    ]
+  },
+  "spec": string                             // the TypeScript body: one test(...) per step
+}
+
+The spec body is injected into a file that already has these imports and hooks in scope:
+
+    import { test, expect } from "@playwright/test";
+    import { annotate } from "<absolute path>";
+    const SCREENSHOT_DIR = process.env.RELEASEBOT_SCREENSHOT_DIR ?? ".";
+
+    // An afterEach hook is auto-injected that takes step-NN.png at the END of every test,
+    // EVEN IF the test failed. So you do NOT need to call page.screenshot() yourself.
+
+Do NOT include imports, SCREENSHOT_DIR, test.afterEach, or test.describe.configure in your spec body — they are provided. Just emit the test(...) calls, in order.
+
+Each test() MUST follow this skeleton:
+
+    test("step-NN · <short description>", async ({ page }) => {
+      await page.goto("<relative URL>");
+      // interactions: locator.click(), .fill(), .hover(), keyboard.press(), etc., as needed
+      // assertions: await expect(locator).toBeVisible(); // or .toHaveText, .toHaveAttribute, etc.
+      await annotate(page, [/* 1-4 CSS selectors to outline */]);
+      // NO page.screenshot — the harness takes one in afterEach.
+    });
 
 Rules:
-- Every step MUST have a non-empty \`assert_contains\`. Pick a diff-specific string (new copy, a new data-* attribute literal, a new component name) — never something that also appears on a login/empty/404 page.
-- Prefer relative URLs that map to routes under the SPA (Paperclip routes include /issues, /inbox, /agents, /companies, /approvals, etc.).
-- \`annotate\` selectors should target DOM nodes the diff adds or modifies. Use stable selectors: data-testid, role, or classes from the diff.
-- No external URLs. No auth flows. The stack boots in local_trusted mode with no sign-in required.
-- Return ONLY the JSON object. No markdown fences, no commentary.`;
+
+- Number steps starting at 01. The step number in the test name MUST match step-NN in the screenshot filename and its index (NN-1) in metadata.steps.
+- Use Playwright locators + expect, NOT text-substring includes. Prefer \`page.getByRole("button", { name: "..." })\`, \`page.getByLabel("...")\`, \`page.getByTestId("...")\`, \`page.getByText("...")\`.
+- Use ONLY relative URLs on page.goto — baseURL is injected from env.
+- For text the PR introduced that lives behind an interaction (menu button, tab, drawer, popover, dialog trigger) — click the trigger FIRST, then assert on the new text. This is the common case.
+- ONLY assert on things the diff actually introduces or modifies. Do NOT add "sanity" assertions on generic page structure (h1 presence, navbar links, etc.) — the diff didn't touch those, they're not a PR signal, and a failing sanity assertion halts the rest of the test. Aim for one assertion per test, the tightest possible to the diff.
+- Pick expect targets that are specific to the diff — new copy, new data-* attributes, new component names. Never something that would also appear on a login/404/empty-state screen.
+- Annotate selectors should target DOM nodes the diff introduced or modified. Use stable selectors (role, aria-label, data-testid). Call annotate() as the FINAL line of the test body.
+- 2 to 6 steps. Each test should be a complete, isolated scenario — no shared state between tests (each gets a fresh page).
+- NO page.waitForTimeout, NO arbitrary setTimeout, NO page.evaluate unless genuinely necessary. Rely on Playwright's auto-wait via expect() and locator actions.
+- The stack boots in local_trusted mode with no sign-in — no auth flows needed.
+
+Keep the spec body clean and human-readable — a reviewer should be able to read it top-to-bottom and understand what was tested.`;
 
 export async function generatePlan(
   pr: PrMeta,
@@ -44,7 +73,13 @@ export async function generatePlan(
     "Body:",
     pr.body || "(empty)",
     "",
-    ...(fixturesBlock ? ["Seeded fixtures available in both environments (use these exact values in step URLs):", fixturesBlock, ""] : []),
+    ...(fixturesBlock
+      ? [
+          "Seeded fixtures available in both environments (use these exact values in step URLs and locators):",
+          fixturesBlock,
+          "",
+        ]
+      : []),
     "Unified diff:",
     "```diff",
     truncatedDiff,
@@ -53,7 +88,7 @@ export async function generatePlan(
 
   const resp = await client.messages.create({
     model: MODEL,
-    max_tokens: 3000,
+    max_tokens: 4000,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userContent }],
   });
@@ -62,14 +97,19 @@ export async function generatePlan(
     .join("\n")
     .trim();
   const json = extractJson(text);
-  const plan = JSON.parse(json) as Plan;
-  validatePlan(plan);
-  return plan;
+  const parsed = JSON.parse(json) as { metadata: PlanMetadata; spec: string };
+  validate(parsed);
+  return { metadata: parsed.metadata, spec: parsed.spec };
 }
 
 function extractJson(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) return fenced[1].trim();
+  // Reject a narrow ```ts ``` that happens to be the spec body only; prefer an outer ``` block
+  // that contains braces.
+  const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+  for (const m of fences) {
+    const inner = m[1].trim();
+    if (inner.startsWith("{") && inner.endsWith("}")) return inner;
+  }
   const firstBrace = text.indexOf("{");
   const lastBrace = text.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) return text.slice(firstBrace, lastBrace + 1);
@@ -79,7 +119,6 @@ function extractJson(text: string): string {
 function renderFixtures(summary: FixtureSummary): string {
   const lines: string[] = [];
   for (const [name, entry] of Object.entries(summary)) {
-    // Skip failed fixtures — listing them invites the planner to hallucinate URLs.
     if (Object.keys(entry.values).length === 0) continue;
     const fields = Object.entries(entry.values)
       .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
@@ -89,15 +128,37 @@ function renderFixtures(summary: FixtureSummary): string {
   if (lines.length === 0) return "";
   lines.push("");
   lines.push(
-    "When a step needs an issue URL, use /issues/<identifier> with an identifier captured above. If no suitable fixture exists, write a step that exercises a list/index surface instead — DO NOT invent an ID or use a company id as an issue id.",
+    "When a step needs an issue URL, use /issues/<identifier> with an identifier captured above. If no suitable fixture exists, target a list/index surface instead — DO NOT invent an ID or use a company id as an issue id.",
   );
   return lines.join("\n");
 }
 
-function validatePlan(plan: Plan): void {
-  if (!plan.steps?.length) throw new Error("Plan has no steps");
-  for (const [i, step] of plan.steps.entries()) {
+function validate(p: { metadata: PlanMetadata; spec: string }): void {
+  if (!p.metadata) throw new Error("Plan missing metadata");
+  if (!Array.isArray(p.metadata.steps) || p.metadata.steps.length === 0) {
+    throw new Error("Plan metadata has no steps");
+  }
+  for (const [i, step] of p.metadata.steps.entries()) {
     if (!step.url?.startsWith("/")) throw new Error(`Step ${i + 1} url must be relative`);
-    if (!step.assert_contains) throw new Error(`Step ${i + 1} missing assert_contains`);
+    if (!step.description) throw new Error(`Step ${i + 1} missing description`);
+  }
+  if (typeof p.spec !== "string" || p.spec.trim().length === 0) {
+    throw new Error("Plan spec body is empty");
+  }
+  // Sanity: spec should contain at least one test(...) call, and the number should
+  // roughly match metadata.steps.length. Accept off-by-one as a soft warning territory.
+  const testCount = (p.spec.match(/\btest\(/g) ?? []).length;
+  if (testCount === 0) throw new Error("Plan spec contains no test(...) calls");
+  if (testCount !== p.metadata.steps.length) {
+    throw new Error(
+      `Plan spec has ${testCount} test(...) calls but metadata declares ${p.metadata.steps.length} steps`,
+    );
   }
 }
+
+// Used by review/report modules:
+export function stepScreenshotName(stepNumber: number): string {
+  return `step-${String(stepNumber).padStart(2, "0")}.png`;
+}
+
+export type { PlanStepMetadata };

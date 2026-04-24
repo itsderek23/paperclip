@@ -1,11 +1,10 @@
-import path from "node:path";
 import fs from "node:fs/promises";
-import { chromium, type Page } from "playwright";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { Plan, Side, SideResult, StepResult } from "./types.ts";
-
-const VIEWPORT = { width: 1440, height: 900 };
-const NAV_TIMEOUT = 20_000;
-const ASSERT_TIMEOUT = 10_000;
+import { stepScreenshotName } from "./plan.ts";
+import { writeGeneratedSpec } from "./spec-generator.ts";
 
 export async function runPlanAgainst(
   plan: Plan,
@@ -13,109 +12,173 @@ export async function runPlanAgainst(
   side: Side,
   artifactsDir: string,
 ): Promise<SideResult> {
-  const outDir = path.join(artifactsDir, side);
-  await fs.mkdir(outDir, { recursive: true });
+  const screenshotDir = path.join(artifactsDir, side);
+  await fs.mkdir(screenshotDir, { recursive: true });
 
-  const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext({ viewport: VIEWPORT });
-  const page = await ctx.newPage();
+  const generatedDir = path.join(artifactsDir, "generated", side);
+  const testOutputDir = path.join(generatedDir, "test-output");
+  await fs.mkdir(testOutputDir, { recursive: true });
 
-  const steps: StepResult[] = [];
-  try {
-    for (const [idx, step] of plan.steps.entries()) {
-      const stepN = idx + 1;
-      const screenshot = path.join(outDir, `step-${String(stepN).padStart(2, "0")}.png`);
-      const result: StepResult = { step_n: stepN, status: "pass", screenshot };
-      try {
-        await page.goto(`${baseUrl}${step.url}`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
-        await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT }).catch(() => {});
-        try {
-          await page.waitForFunction(
-            (needle) => document.body.innerText.includes(needle),
-            step.assert_contains,
-            { timeout: ASSERT_TIMEOUT },
-          );
-        } catch (err) {
-          result.status = "fail";
-          result.error = `assert_contains "${step.assert_contains}" not found`;
-        }
-        if (step.annotate?.length) {
-          await annotate(page, step.annotate);
-        }
-        await page.screenshot({ path: screenshot, fullPage: !!step.full_page });
-        if (step.annotate?.length) {
-          await page.evaluate(() => {
-            document.getElementById("__releasebot_overlay__")?.remove();
-          });
-        }
-      } catch (err) {
-        result.status = "fail";
-        result.error = (err as Error).message;
-        try {
-          await page.screenshot({ path: screenshot }).catch(() => {});
-        } catch {}
-      }
-      steps.push(result);
-    }
-  } finally {
-    await ctx.close();
-    await browser.close();
-  }
+  const annotateHelper = resolveAnnotateHelperPath();
+  const { specPath, configPath } = await writeGeneratedSpec({
+    outDir: generatedDir,
+    specBody: plan.spec,
+    annotateHelperAbsPath: annotateHelper,
+  });
+
+  await runPlaywright({
+    configPath,
+    cwd: generatedDir,
+    env: {
+      RELEASEBOT_BASE_URL: baseUrl,
+      RELEASEBOT_SCREENSHOT_DIR: screenshotDir,
+      RELEASEBOT_RUN_OUTPUT: testOutputDir,
+    },
+  });
+
+  const steps = await parseResults(
+    path.join(generatedDir, "results.json"),
+    plan.metadata.steps.length,
+    screenshotDir,
+  );
 
   const result: SideResult = { side, baseUrl, steps };
-  await fs.writeFile(path.join(outDir, "steps.json"), JSON.stringify(result, null, 2));
+  await fs.writeFile(path.join(screenshotDir, "steps.json"), JSON.stringify(result, null, 2));
+  // Stash specPath for the report renderer (no schema change needed; it's inferable from artifacts dir).
+  void specPath;
   return result;
 }
 
-async function annotate(page: Page, selectors: string[]): Promise<void> {
-  const boxes: Array<{ sel: string; box: { x: number; y: number; width: number; height: number } | null }> = [];
-  for (const sel of selectors) {
-    try {
-      const box = await page.locator(sel).first().boundingBox({ timeout: 2_000 });
-      boxes.push({ sel, box });
-    } catch {
-      boxes.push({ sel, box: null });
-    }
+function resolveAnnotateHelperPath(): string {
+  // tools/releasebot/src/run.ts → tools/releasebot/src/runtime/annotate.ts
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(here, "runtime", "annotate.ts");
+}
+
+async function runPlaywright(opts: {
+  configPath: string;
+  cwd: string;
+  env: Record<string, string>;
+}): Promise<void> {
+  // Resolve the Playwright test runner CLI inside the tool's own node_modules,
+  // regardless of where the CLI is invoked from. Avoids relying on PATH.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const playwrightCli = path.resolve(here, "..", "node_modules", "@playwright", "test", "cli.js");
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(
+      process.execPath,
+      [playwrightCli, "test", "--config", opts.configPath, "--reporter=json,list"],
+      {
+        cwd: opts.cwd,
+        env: { ...process.env, ...opts.env },
+        stdio: "inherit",
+      },
+    );
+    proc.on("exit", (code) => {
+      // Non-zero exit is expected when tests fail; JSON reporter still writes results.json.
+      // Resolve unconditionally — `parseResults` reads the JSON and handles per-step pass/fail.
+      void code;
+      resolve();
+    });
+    proc.on("error", reject);
+  });
+}
+
+async function parseResults(
+  resultsPath: string,
+  expectedStepCount: number,
+  screenshotDir: string,
+): Promise<StepResult[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(resultsPath, "utf8");
+  } catch {
+    // Playwright crashed before writing results — synthesize failures for every step.
+    return blankStepResults(expectedStepCount, screenshotDir, "Playwright did not produce results.json");
   }
-  await page.evaluate((data) => {
-    const prev = document.getElementById("__releasebot_overlay__");
-    if (prev) prev.remove();
-    const overlay = document.createElement("div");
-    overlay.id = "__releasebot_overlay__";
-    overlay.style.cssText =
-      "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
-    for (const [i, item] of data.entries()) {
-      if (!item.box) continue;
-      const box = document.createElement("div");
-      box.style.cssText = [
-        `position:absolute`,
-        `left:${item.box.x}px`,
-        `top:${item.box.y}px`,
-        `width:${item.box.width}px`,
-        `height:${item.box.height}px`,
-        `outline:2px solid #ff3b30`,
-        `box-shadow:0 0 0 1px rgba(255,255,255,0.9) inset`,
-        `border-radius:2px`,
-      ].join(";");
-      const label = document.createElement("div");
-      label.textContent = String(i + 1);
-      label.style.cssText = [
-        `position:absolute`,
-        `left:-8px`,
-        `top:-8px`,
-        `min-width:18px`,
-        `height:18px`,
-        `padding:0 5px`,
-        `background:#ff3b30`,
-        `color:#fff`,
-        `font:600 11px/18px -apple-system,system-ui,sans-serif`,
-        `text-align:center`,
-        `border-radius:9px`,
-        `box-shadow:0 0 0 1px #fff`,
-      ].join(";");
-      box.appendChild(label);
-      overlay.appendChild(box);
+  const parsed = JSON.parse(raw) as PlaywrightReport;
+  const testCases = flattenTests(parsed);
+  const byNumber = new Map<number, PlaywrightTestCase>();
+  for (const tc of testCases) {
+    const m = tc.title.match(/^step-(\d+)\b/);
+    if (!m) continue;
+    byNumber.set(Number(m[1]), tc);
+  }
+
+  const steps: StepResult[] = [];
+  for (let n = 1; n <= expectedStepCount; n++) {
+    const tc = byNumber.get(n);
+    const screenshot = path.join(screenshotDir, stepScreenshotName(n));
+    if (!tc) {
+      steps.push({
+        step_n: n,
+        status: "fail",
+        error: `No Playwright test matched step-${String(n).padStart(2, "0")}`,
+        screenshot,
+      });
+      continue;
     }
-    document.body.appendChild(overlay);
-  }, boxes);
+    const lastResult = tc.results[tc.results.length - 1];
+    const status = lastResult?.status === "passed" ? "pass" : "fail";
+    const error =
+      status === "fail" ? summarizeError(lastResult) : undefined;
+    steps.push({ step_n: n, status, error, screenshot });
+  }
+  return steps;
+}
+
+function blankStepResults(count: number, screenshotDir: string, error: string): StepResult[] {
+  const out: StepResult[] = [];
+  for (let n = 1; n <= count; n++) {
+    out.push({
+      step_n: n,
+      status: "fail",
+      error,
+      screenshot: path.join(screenshotDir, stepScreenshotName(n)),
+    });
+  }
+  return out;
+}
+
+function summarizeError(result: PlaywrightResult | undefined): string {
+  if (!result) return "unknown failure";
+  if (result.error?.message) return result.error.message.split("\n").slice(0, 3).join(" ").slice(0, 400);
+  if (result.status === "timedOut") return "timed out";
+  return result.status;
+}
+
+function flattenTests(report: PlaywrightReport): PlaywrightTestCase[] {
+  const out: PlaywrightTestCase[] = [];
+  const visit = (suite: PlaywrightSuite) => {
+    for (const spec of suite.specs ?? []) {
+      for (const tc of spec.tests ?? []) {
+        out.push({ title: spec.title, results: tc.results ?? [] });
+      }
+    }
+    for (const child of suite.suites ?? []) visit(child);
+  };
+  for (const suite of report.suites ?? []) visit(suite);
+  return out;
+}
+
+// Minimal shape of the Playwright JSON reporter output that we read.
+interface PlaywrightReport {
+  suites?: PlaywrightSuite[];
+}
+interface PlaywrightSuite {
+  specs?: Array<{
+    title: string;
+    tests?: Array<{
+      results?: PlaywrightResult[];
+    }>;
+  }>;
+  suites?: PlaywrightSuite[];
+}
+interface PlaywrightTestCase {
+  title: string;
+  results: PlaywrightResult[];
+}
+interface PlaywrightResult {
+  status: "passed" | "failed" | "timedOut" | "skipped" | "interrupted";
+  error?: { message?: string; stack?: string };
 }

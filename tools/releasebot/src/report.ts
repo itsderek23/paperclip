@@ -41,24 +41,24 @@ function renderMarkdown(args: {
   lines.push("");
   lines.push(`## Plan`);
   lines.push("");
-  lines.push(`**Title:** ${plan.title}  `);
-  lines.push(`**Goal:** ${plan.goal}  `);
+  lines.push(`**Title:** ${plan.metadata.title}  `);
+  lines.push(`**Goal:** ${plan.metadata.goal}  `);
   lines.push("");
-  lines.push(`**Rationale:** ${plan.rationale}`);
+  lines.push(`**Rationale:** ${plan.metadata.rationale}`);
   lines.push("");
   lines.push(`## Steps`);
   lines.push("");
   lines.push(`| # | Step | URL | Assertion | Before | After | Verdict | Observation |`);
   lines.push(`|---|---|---|---|---|---|---|---|`);
-  for (const [i, step] of plan.steps.entries()) {
+  for (const [i, step] of plan.metadata.steps.entries()) {
     const b = before.steps[i];
     const a = after.steps[i];
     const rv = review.steps.find((s) => s.step_n === i + 1);
     const beforeImg = b ? `![](${path.relative(path.dirname(""), b.screenshot)})` : "—";
     const afterImg = a ? `![](${path.relative(path.dirname(""), a.screenshot)})` : "—";
-    // Assertion layer is a safety-net signal only; visual review is source of truth.
+    // Playwright assertion layer is a safety-net signal; visual review is source of truth.
     // Before-side assert fails are expected (diff copy not yet present); don't mark them red.
-    const assertCell = `\`${step.assert_contains}\` ${a?.status === "fail" ? "⚠" : "✓"}`;
+    const assertCell = a?.status === "fail" ? "⚠" : "✓";
     const verdictCell = rv ? verdictBadge(rv.verdict) : "—";
     const obs = rv?.observation ?? "";
     lines.push(`| ${i + 1} | ${escapeCell(step.description)} | \`${step.url}\` | ${assertCell} | ${beforeImg} | ${afterImg} | ${verdictCell} | ${escapeCell(obs)} |`);
@@ -87,7 +87,11 @@ async function renderHtml(args: {
 }): Promise<string> {
   const { pr, plan, before, after, review, artifactsDir } = args;
   const rows: string[] = [];
-  for (const [i, step] of plan.steps.entries()) {
+  const traceBefore = path.relative(artifactsDir, path.join(artifactsDir, "generated/before/test-output"));
+  const traceAfter = path.relative(artifactsDir, path.join(artifactsDir, "generated/after/test-output"));
+  const specBefore = path.relative(artifactsDir, path.join(artifactsDir, "generated/before/generated.spec.ts"));
+  const specAfter = path.relative(artifactsDir, path.join(artifactsDir, "generated/after/generated.spec.ts"));
+  for (const [i, step] of plan.metadata.steps.entries()) {
     const b = before.steps[i];
     const a = after.steps[i];
     const rv = review.steps.find((s) => s.step_n === i + 1);
@@ -102,7 +106,7 @@ async function renderHtml(args: {
     <h3>${escapeHtml(step.description)}</h3>
     <span class="verdict">${escapeHtml(verdictLabel(verdict))}</span>
   </header>
-  <p class="meta"><code>${escapeHtml(step.url)}</code> · assert <code>${escapeHtml(step.assert_contains)}</code></p>
+  <p class="meta"><code>${escapeHtml(step.url)}</code></p>
   ${obs ? `<p class="obs">${escapeHtml(obs)}</p>` : ""}
   <div class="pair">
     <figure><figcaption>before · ${pr.baseSha.slice(0, 7)}</figcaption>${beforeSrc ? `<img src="${escapeAttr(beforeSrc)}" />` : `<div class="missing">missing</div>`}</figure>
@@ -151,9 +155,15 @@ async function renderHtml(args: {
 <p class="pr-url"><a href="${escapeAttr(pr.url)}">${escapeAttr(pr.url)}</a>
  · base <code>${pr.baseSha.slice(0, 7)}</code> · head <code>${pr.headSha.slice(0, 7)}</code></p>
 <div class="summary">
-  <p><strong>${escapeHtml(plan.title)}</strong> — ${escapeHtml(plan.goal)}</p>
+  <p><strong>${escapeHtml(plan.metadata.title)}</strong> — ${escapeHtml(plan.metadata.goal)}</p>
   <p>${escapeHtml(review.summary)}</p>
-  <p class="rationale"><em>Plan rationale:</em> ${escapeHtml(plan.rationale)}</p>
+  <p class="rationale"><em>Plan rationale:</em> ${escapeHtml(plan.metadata.rationale)}</p>
+  <p class="artifacts-links">
+    <a href="${escapeAttr(specBefore)}">before spec</a> ·
+    <a href="${escapeAttr(specAfter)}">after spec</a> ·
+    <a href="${escapeAttr(traceBefore)}">before trace output</a> ·
+    <a href="${escapeAttr(traceAfter)}">after trace output</a>
+  </p>
 </div>
 ${rows.join("\n")}
 </body></html>`;
