@@ -5,11 +5,16 @@ import path from "node:path";
 import type { BootedStack, SeedContext, StackAdapter } from "./adapter.ts";
 import type { FixtureSpec, FixtureSummary } from "../types.ts";
 import { executeFixtureSpec, synthesizeFixtureSpecFromPr } from "./paperclip-seed.ts";
+import { pnpmInstall } from "../worktree.ts";
 
 const HEALTH_TIMEOUT_MS = 180_000;
 const HEALTH_POLL_MS = 1_500;
 
 export class PaperclipAdapter implements StackAdapter {
+  async install(worktree: string): Promise<void> {
+    await pnpmInstall(worktree);
+  }
+
   async boot(worktree: string, port: number, homeDir: string): Promise<BootedStack> {
     // Wipe any stale state from a prior run — partial PG init leaves the data
     // dir non-empty and blocks a fresh boot with "data directory might already exist".

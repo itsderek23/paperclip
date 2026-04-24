@@ -69,6 +69,7 @@ export default defineConfig({
   reporter: [["json", { outputFile: "results.json" }], ["list"]],
   use: {
     baseURL: process.env.RELEASEBOT_BASE_URL,
+    storageState: process.env.RELEASEBOT_STORAGE_STATE || undefined,
     viewport: { width: 1440, height: 900 },
     trace: "on",
     video: "retain-on-failure",

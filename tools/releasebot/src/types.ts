@@ -73,3 +73,8 @@ export interface FixtureSummaryEntry {
 }
 
 export type FixtureSummary = Record<string, FixtureSummaryEntry>;
+
+export interface AuthContext {
+  storageStatePath: string;
+  description: string;
+}

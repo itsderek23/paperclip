@@ -11,6 +11,7 @@ export async function runPlanAgainst(
   baseUrl: string,
   side: Side,
   artifactsDir: string,
+  storageStatePath?: string,
 ): Promise<SideResult> {
   const screenshotDir = path.join(artifactsDir, side);
   await fs.mkdir(screenshotDir, { recursive: true });
@@ -26,15 +27,13 @@ export async function runPlanAgainst(
     annotateHelperAbsPath: annotateHelper,
   });
 
-  await runPlaywright({
-    configPath,
-    cwd: generatedDir,
-    env: {
-      RELEASEBOT_BASE_URL: baseUrl,
-      RELEASEBOT_SCREENSHOT_DIR: screenshotDir,
-      RELEASEBOT_RUN_OUTPUT: testOutputDir,
-    },
-  });
+  const env: Record<string, string> = {
+    RELEASEBOT_BASE_URL: baseUrl,
+    RELEASEBOT_SCREENSHOT_DIR: screenshotDir,
+    RELEASEBOT_RUN_OUTPUT: testOutputDir,
+  };
+  if (storageStatePath) env.RELEASEBOT_STORAGE_STATE = storageStatePath;
+  await runPlaywright({ configPath, cwd: generatedDir, env });
 
   const steps = await parseResults(
     path.join(generatedDir, "results.json"),
@@ -63,14 +62,19 @@ async function runPlaywright(opts: {
   // Resolve the Playwright test runner CLI inside the tool's own node_modules,
   // regardless of where the CLI is invoked from. Avoids relying on PATH.
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const playwrightCli = path.resolve(here, "..", "node_modules", "@playwright", "test", "cli.js");
+  const releasebotNodeModules = path.resolve(here, "..", "node_modules");
+  const playwrightCli = path.join(releasebotNodeModules, "@playwright", "test", "cli.js");
+  const existingNodePath = process.env.NODE_PATH ?? "";
+  const nodePath = existingNodePath
+    ? `${releasebotNodeModules}${path.delimiter}${existingNodePath}`
+    : releasebotNodeModules;
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       process.execPath,
       [playwrightCli, "test", "--config", opts.configPath],
       {
         cwd: opts.cwd,
-        env: { ...process.env, ...opts.env },
+        env: { ...process.env, NODE_PATH: nodePath, ...opts.env },
         stdio: "inherit",
       },
     );

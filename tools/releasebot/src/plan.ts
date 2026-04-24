@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { FixtureSummary, Plan, PlanMetadata, PlanStepMetadata, PrMeta } from "./types.ts";
+import type { AuthContext, FixtureSummary, Plan, PlanMetadata, PlanStepMetadata, PrMeta } from "./types.ts";
 
 const MODEL = "claude-opus-4-7";
 const MAX_DIFF_CHARS = 180_000;
@@ -60,7 +60,7 @@ Rules:
 - Annotate selectors (passed to markAnnotations()) should target DOM nodes the diff introduced or modified. Use stable selectors (role, aria-label, data-testid). Every match of each selector is outlined — if a selector matches multiple elements (e.g. an aria-label that appears on both an inline ref and a sidebar pill), all matches get boxed with the same label number, which is usually what you want. If you specifically want to point at ONE region, scope the selector: prefix with a container selector like \`aside a[...]\`, \`[data-testid="issue-properties"] a\`, or similar.
 - 2 to 6 steps. Each test should be a complete, isolated scenario — no shared state between tests (each gets a fresh page).
 - NO page.waitForTimeout, NO arbitrary setTimeout, NO page.evaluate unless genuinely necessary. Rely on Playwright's auto-wait via expect() and locator actions.
-- The stack boots in local_trusted mode with no sign-in — no auth flows needed.
+- {{AUTH_LINE}}
 
 Keep the spec body clean and human-readable — a reviewer should be able to read it top-to-bottom and understand what was tested.`;
 
@@ -72,9 +72,14 @@ export async function generatePlan(
     fixtures?: FixtureSummary;
     sourceContext?: string;
     retryFeedback?: string[];
+    authContext?: AuthContext;
   },
 ): Promise<Plan> {
   const client = new Anthropic({ apiKey: options.apiKey });
+  const authLine = options.authContext
+    ? `The browser is pre-authenticated — ${options.authContext.description}. Do NOT generate login steps; navigate directly to authenticated routes.`
+    : "The stack boots in local_trusted mode with no sign-in — no auth flows needed.";
+  const systemPrompt = SYSTEM_PROMPT.replace("{{AUTH_LINE}}", authLine);
   const truncatedDiff = diff.length > MAX_DIFF_CHARS ? diff.slice(0, MAX_DIFF_CHARS) + "\n\n... (diff truncated)" : diff;
   const fixturesBlock = options.fixtures ? renderFixtures(options.fixtures) : "";
   const userContent = [
@@ -116,7 +121,7 @@ export async function generatePlan(
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: 4000,
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: [{ role: "user", content: userContent }],
   });
   const text = resp.content

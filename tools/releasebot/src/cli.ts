@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureShaReachable, fetchPrCiSummary, fetchPrDiff, fetchPrMeta } from "./pr.ts";
-import { addWorktree, pnpmInstall, removeWorktree } from "./worktree.ts";
+import { addWorktree, removeWorktree } from "./worktree.ts";
 import { PaperclipAdapter } from "./stack/paperclip.ts";
+import { CalDiyAdapter } from "./stack/caldiy.ts";
+import type { StackAdapter } from "./stack/adapter.ts";
 import { generatePlan } from "./plan.ts";
 import { extractSelectors, findUngroundedSelectors } from "./plan-validate.ts";
 import { runPlanAgainst } from "./run.ts";
@@ -12,6 +14,8 @@ import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
 import { gatherDiffContext } from "./diff-context.ts";
 import type { Plan, Side } from "./types.ts";
+
+type StackName = "paperclip" | "caldiy";
 
 interface Args {
   prNumber: number;
@@ -24,16 +28,47 @@ interface Args {
   planFromCache: boolean;
   forceBroken: boolean;
   forceNoUi: boolean;
+  stack: StackName;
+  repo: string | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const flags = new Set(argv.filter((a) => a.startsWith("--")));
-  const positional = argv.filter((a) => !a.startsWith("--"));
+  const positional: string[] = [];
+  const flags = new Set<string>();
+  const values = new Map<string, string>();
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith("--")) {
+      positional.push(a);
+      continue;
+    }
+    const eq = a.indexOf("=");
+    if (eq !== -1) {
+      values.set(a.slice(0, eq), a.slice(eq + 1));
+      continue;
+    }
+    if (a === "--stack" || a === "--repo") {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) {
+        console.error(`Missing value for ${a}`);
+        process.exit(2);
+      }
+      values.set(a, next);
+      i++;
+      continue;
+    }
+    flags.add(a);
+  }
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy] [--repo <path>] [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
     );
+    process.exit(2);
+  }
+  const stackRaw = values.get("--stack") ?? "paperclip";
+  if (stackRaw !== "paperclip" && stackRaw !== "caldiy") {
+    console.error(`Unknown --stack ${stackRaw}; expected paperclip or caldiy`);
     process.exit(2);
   }
   return {
@@ -47,7 +82,24 @@ function parseArgs(argv: string[]): Args {
     planFromCache: flags.has("--plan-from-cache"),
     forceBroken: flags.has("--force-broken"),
     forceNoUi: flags.has("--force-no-ui"),
+    stack: stackRaw,
+    repo: values.get("--repo") ?? process.env.RELEASEBOT_REPO,
   };
+}
+
+function getAdapter(name: StackName): StackAdapter {
+  switch (name) {
+    case "paperclip":
+      return new PaperclipAdapter();
+    case "caldiy":
+      return new CalDiyAdapter();
+  }
+}
+
+function resolveRepoRoot(explicit: string | undefined): string {
+  if (explicit) return path.resolve(explicit);
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "..", "..", "..");
 }
 
 async function main(): Promise<void> {
@@ -58,7 +110,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const repoRoot = findRepoRoot();
+  const repoRoot = resolveRepoRoot(args.repo);
+  process.chdir(repoRoot);
   const prDir = path.join(repoRoot, "tmp", "releasebot", String(args.prNumber));
   const artifactsDir = path.join(prDir, "artifacts");
   await fs.mkdir(artifactsDir, { recursive: true });
@@ -124,20 +177,21 @@ async function main(): Promise<void> {
   await addWorktree(beforeWt, pr.baseSha);
   await addWorktree(afterWt, pr.headSha);
 
+  const adapter = getAdapter(args.stack);
+
   if (!args.skipInstall) {
-    log("pnpm install (before)...");
-    await pnpmInstall(beforeWt);
-    log("pnpm install (after)...");
-    await pnpmInstall(afterWt);
+    log(`installing deps (before, stack=${args.stack})...`);
+    await adapter.install(beforeWt);
+    log(`installing deps (after, stack=${args.stack})...`);
+    await adapter.install(afterWt);
   } else {
-    log("skipping pnpm install (--skip-install)");
+    log("skipping install (--skip-install)");
     for (const wt of [beforeWt, afterWt]) {
-      const tsxCli = path.join(wt, "cli/node_modules/tsx/dist/cli.mjs");
       try {
-        await fs.stat(tsxCli);
+        await fs.stat(path.join(wt, "node_modules"));
       } catch {
         console.error(
-          `--skip-install passed but ${wt} is missing node_modules (checked ${path.relative(repoRoot, tsxCli)}).`,
+          `--skip-install passed but ${wt} is missing node_modules.`,
         );
         console.error("Re-run without --skip-install to install dependencies in the fresh worktree.");
         process.exit(2);
@@ -172,7 +226,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  const adapter = new PaperclipAdapter();
   const beforeHome = path.join(prDir, "before", ".paperclip-home");
   const afterHome = path.join(prDir, "after", ".paperclip-home");
   const beforePort = 3301;
@@ -221,15 +274,40 @@ async function main(): Promise<void> {
       }
     }
 
+    let beforeAuth: Awaited<ReturnType<NonNullable<typeof adapter.provideAuth>>> | undefined;
+    let afterAuth: Awaited<ReturnType<NonNullable<typeof adapter.provideAuth>>> | undefined;
+    if (adapter.provideAuth) {
+      log("authenticating before-side...");
+      beforeAuth = await adapter
+        .provideAuth(beforeStack.baseUrl, artifactsDir, "before")
+        .catch((e) => {
+          log(`  before auth failed: ${(e as Error).message}`);
+          return undefined;
+        });
+      log("authenticating after-side...");
+      afterAuth = await adapter
+        .provideAuth(afterStack.baseUrl, artifactsDir, "after")
+        .catch((e) => {
+          log(`  after auth failed: ${(e as Error).message}`);
+          return undefined;
+        });
+      if (beforeAuth) log(`  ${beforeAuth.description}`);
+    }
+
     log("generating plan from diff...");
-    const plan = await planWithGroundingRetry(pr, diff, { apiKey, fixtures, sourceContext });
+    const plan = await planWithGroundingRetry(pr, diff, {
+      apiKey,
+      fixtures,
+      sourceContext,
+      authContext: beforeAuth,
+    });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
 
     log("running plan (before)...");
-    const beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir);
+    const beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
     log("running plan (after)...");
-    const afterResult = await runPlanAgainst(plan, afterStack.baseUrl, "after", artifactsDir);
+    const afterResult = await runPlanAgainst(plan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
 
     log("visual review...");
     const review = await reviewRun(pr, plan, beforeResult, afterResult, { apiKey });
@@ -332,12 +410,6 @@ async function dirSizeMb(dir: string): Promise<number> {
   }
   await walk(dir);
   return Math.round(total / (1024 * 1024));
-}
-
-function findRepoRoot(): string {
-  // tools/releasebot/src/cli.ts → .. .. ..
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..", "..", "..");
 }
 
 function log(msg: string): void {
