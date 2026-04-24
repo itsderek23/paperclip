@@ -18,6 +18,7 @@ interface Args {
   keepStacks: boolean;
   planOnly: boolean;
   clean: boolean;
+  reportOnly: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -25,7 +26,7 @@ function parseArgs(argv: string[]): Args {
   const positional = argv.filter((a) => !a.startsWith("--"));
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean]");
+    console.error("Usage: pnpm releasebot:pr <PR_NUMBER> [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only]");
     process.exit(2);
   }
   return {
@@ -34,6 +35,7 @@ function parseArgs(argv: string[]): Args {
     keepStacks: flags.has("--keep-stacks"),
     planOnly: flags.has("--plan-only"),
     clean: flags.has("--clean"),
+    reportOnly: flags.has("--report-only"),
   };
 }
 
@@ -51,6 +53,11 @@ async function main(): Promise<void> {
   await fs.mkdir(artifactsDir, { recursive: true });
 
   log(`releasebot · PR #${args.prNumber}`);
+
+  if (args.reportOnly) {
+    await regenerateReport(artifactsDir);
+    return;
+  }
 
   log("fetching PR metadata + diff...");
   const pr = await fetchPrMeta(args.prNumber);
@@ -184,6 +191,20 @@ async function main(): Promise<void> {
       log(`  worktrees removed; artifacts/ retained (${sizeMb} MB)`);
     }
   }
+}
+
+async function regenerateReport(artifactsDir: string): Promise<void> {
+  log("regenerating report from existing artifacts...");
+  const read = async (name: string): Promise<unknown> =>
+    JSON.parse(await fs.readFile(path.join(artifactsDir, name), "utf8"));
+  const pr = (await read("pr.json")) as Parameters<typeof writeReport>[0]["pr"];
+  const plan = (await read("plan.json")) as Plan;
+  const review = (await read("review.json")) as Parameters<typeof writeReport>[0]["review"];
+  const before = (await read(path.join("before", "steps.json"))) as Parameters<typeof writeReport>[0]["before"];
+  const after = (await read(path.join("after", "steps.json"))) as Parameters<typeof writeReport>[0]["after"];
+  const { markdownPath, htmlPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
+  log(`  markdown: ${markdownPath}`);
+  log(`  html:     ${htmlPath}`);
 }
 
 async function dirSizeMb(dir: string): Promise<number> {

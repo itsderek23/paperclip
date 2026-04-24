@@ -109,8 +109,8 @@ async function renderHtml(args: {
   <p class="meta"><code>${escapeHtml(step.url)}</code></p>
   ${obs ? `<p class="obs">${escapeHtml(obs)}</p>` : ""}
   <div class="pair">
-    <figure><figcaption>before · ${pr.baseSha.slice(0, 7)}</figcaption>${beforeSrc ? `<img src="${escapeAttr(beforeSrc)}" />` : `<div class="missing">missing</div>`}</figure>
-    <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption>${afterSrc ? `<img src="${escapeAttr(afterSrc)}" />` : `<div class="missing">missing</div>`}</figure>
+    <figure><figcaption>before · ${pr.baseSha.slice(0, 7)}</figcaption>${beforeSrc ? `<a href="${escapeAttr(beforeSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(beforeSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
+    <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption>${afterSrc ? `<a href="${escapeAttr(afterSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(afterSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
   </div>
 </section>`);
   }
@@ -138,7 +138,9 @@ async function renderHtml(args: {
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
   figure { margin: 0; border: 1px solid #eee; border-radius: 6px; overflow: hidden; background: #fafafa; }
   figcaption { padding: .4rem .6rem; font-size: .75rem; color: #555; background: #f0f0f0; border-bottom: 1px solid #eee; }
+  figure a { display: block; text-decoration: none; }
   figure img { display: block; width: 100%; height: auto; }
+  figure a:hover img { opacity: .92; }
   .missing { padding: 3rem; text-align: center; color: #999; }
   code { background: #f1f1f3; padding: 0 .3rem; border-radius: 3px; font-size: .85em; }
   @media (prefers-color-scheme: dark) {
