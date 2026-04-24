@@ -84,6 +84,18 @@ async function main(): Promise<void> {
     await pnpmInstall(afterWt);
   } else {
     log("skipping pnpm install (--skip-install)");
+    for (const wt of [beforeWt, afterWt]) {
+      const tsxCli = path.join(wt, "cli/node_modules/tsx/dist/cli.mjs");
+      try {
+        await fs.stat(tsxCli);
+      } catch {
+        console.error(
+          `--skip-install passed but ${wt} is missing node_modules (checked ${path.relative(repoRoot, tsxCli)}).`,
+        );
+        console.error("Re-run without --skip-install to install dependencies in the fresh worktree.");
+        process.exit(2);
+      }
+    }
   }
 
   log("gathering source context around diff hunks...");

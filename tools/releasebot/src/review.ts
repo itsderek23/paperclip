@@ -25,7 +25,9 @@ const SUMMARY_SYSTEM = `Write a <=400-character single-paragraph run summary for
 
 The visual review (per-step verdicts: pass/intentional_change/fail) is the source of truth for whether this PR ships cleanly. Anchor the summary on those verdicts.
 
-The Playwright assertion layer is a secondary signal. After-side assertion failures are worth mentioning only if the visual review also flagged the step as fail. Before-side assertion failures are EXPECTED when the test asserts on copy the PR introduced — do not flag them as regressions.
+The Playwright assertion layer is a secondary signal. The user message gives you exact pass/fail counts for each side as "Facts". Treat those numbers as ground truth — do NOT invert, embellish, or restate them inaccurately. If "after_fails" is 0, the after side did not fail. Before-side assertion failures are EXPECTED when the test asserts on copy the PR introduced — do not flag them as regressions.
+
+After-side assertion failures are worth mentioning only if the visual review also flagged the step as fail.
 
 Start with the headline outcome (how many steps passed / were intentional_change / failed per the visual review), then what the visual review actually observed, then any caveat worth a reviewer's attention. Natural user-facing language — no code identifiers, no bulleted lists. End on a complete sentence. Return plain text only.`;
 
@@ -145,13 +147,23 @@ async function summarize(
   before: SideResult,
   after: SideResult,
 ): Promise<string> {
+  const beforeFails = before.steps.filter((s) => s.status === "fail").length;
   const afterFails = after.steps.filter((s) => s.status === "fail").length;
+  const visualCounts = {
+    pass: steps.filter((s) => s.verdict === "pass").length,
+    intentional_change: steps.filter((s) => s.verdict === "intentional_change").length,
+    fail: steps.filter((s) => s.verdict === "fail").length,
+  };
   const content = [
     `PR #${pr.number}: ${pr.title}`,
     `Body: ${pr.body.slice(0, 600)}`,
-    `Step-level visual review (source of truth): ${JSON.stringify(steps)}`,
-    `Playwright assertion failures on after side (secondary signal): ${afterFails}/${after.steps.length}`,
-  ].join("\n\n");
+    "Facts (ground truth — quote these numbers, do not invert):",
+    `  total_steps: ${steps.length}`,
+    `  visual_review: ${visualCounts.pass} pass, ${visualCounts.intentional_change} intentional_change, ${visualCounts.fail} fail`,
+    `  before_fails: ${beforeFails}/${before.steps.length} (expected — PR introduces new copy/routes)`,
+    `  after_fails: ${afterFails}/${after.steps.length}`,
+    `Per-step visual review detail: ${JSON.stringify(steps)}`,
+  ].join("\n");
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: 400,

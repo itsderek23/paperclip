@@ -40,7 +40,17 @@ export async function fetchPrDiff(prNumber: number): Promise<string> {
 export async function ensureShaReachable(sha: string, prNumber: number): Promise<void> {
   try {
     await execFile("git", ["cat-file", "-e", sha]);
+    return;
   } catch {
-    await execFile("git", ["fetch", "origin", `pull/${prNumber}/head`]);
+    // not local yet
   }
+  try {
+    await execFile("git", ["fetch", "origin", `pull/${prNumber}/head`]);
+    await execFile("git", ["cat-file", "-e", sha]);
+    return;
+  } catch {
+    // pull/<n>/head covers the head commit and its ancestors, but not a base SHA
+    // on origin/<baseBranch> that has moved since the last fetch. Fall through.
+  }
+  await execFile("git", ["fetch", "origin", sha]);
 }
