@@ -6,6 +6,7 @@ import { ensureShaReachable, fetchPrCiSummary, fetchPrDiff, fetchPrMeta } from "
 import { addWorktree, removeWorktree } from "./worktree.ts";
 import { PaperclipAdapter } from "./stack/paperclip.ts";
 import { CalDiyAdapter } from "./stack/caldiy.ts";
+import { OpenWebUiAdapter } from "./stack/openwebui.ts";
 import type { StackAdapter } from "./stack/adapter.ts";
 import { generatePlan } from "./plan.ts";
 import { extractSelectors, findUngroundedSelectors } from "./plan-validate.ts";
@@ -15,7 +16,7 @@ import { writeReport } from "./report.ts";
 import { gatherDiffContext } from "./diff-context.ts";
 import type { Plan, Side } from "./types.ts";
 
-type StackName = "paperclip" | "caldiy";
+type StackName = "paperclip" | "caldiy" | "openwebui";
 
 interface Args {
   prNumber: number;
@@ -62,13 +63,13 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy] [--repo <path>] [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
   const stackRaw = values.get("--stack") ?? "paperclip";
-  if (stackRaw !== "paperclip" && stackRaw !== "caldiy") {
-    console.error(`Unknown --stack ${stackRaw}; expected paperclip or caldiy`);
+  if (stackRaw !== "paperclip" && stackRaw !== "caldiy" && stackRaw !== "openwebui") {
+    console.error(`Unknown --stack ${stackRaw}; expected paperclip, caldiy, or openwebui`);
     process.exit(2);
   }
   return {
@@ -93,6 +94,8 @@ function getAdapter(name: StackName): StackAdapter {
       return new PaperclipAdapter();
     case "caldiy":
       return new CalDiyAdapter();
+    case "openwebui":
+      return new OpenWebUiAdapter();
   }
 }
 

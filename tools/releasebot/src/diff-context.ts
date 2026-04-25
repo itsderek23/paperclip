@@ -77,7 +77,7 @@ function isUiRelevant(hunk: Hunk): boolean {
   // for the plan we want actual component source, not mock setups.
   if (/\.(test|spec|stories)\.(t|j)sx?$/.test(f)) return false;
   if (f.startsWith("ui/")) return true;
-  // Some apps keep components under packages/ — include .tsx/.jsx anywhere.
-  if (/\.(tsx|jsx)$/.test(f)) return true;
+  // Some apps keep components under packages/ — include .tsx/.jsx/.svelte anywhere.
+  if (/\.(tsx|jsx|svelte)$/.test(f)) return true;
   return false;
 }
