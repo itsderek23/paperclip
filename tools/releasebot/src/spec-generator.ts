@@ -113,7 +113,7 @@ export default defineConfig({
     storageState: process.env.RELEASEBOT_STORAGE_STATE || undefined,
     viewport: { width: 1440, height: 900 },
     trace: "on",
-    video: "retain-on-failure",
+    video: "on",
     screenshot: "only-on-failure",
   },
   fullyParallel: false,
