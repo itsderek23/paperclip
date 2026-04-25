@@ -618,7 +618,17 @@ async function planWithGroundingRetry(
 
   log(`  ⚠ ${ungrounded.length} ungrounded selector(s) in plan: ${ungrounded.map((s) => JSON.stringify(s)).join(", ")}`);
   log("  retrying plan generation with selector feedback...");
-  const retried = await generatePlan(pr, diff, { ...options, retryFeedback: ungrounded });
+  let retried: Plan;
+  try {
+    retried = await generatePlan(pr, diff, { ...options, retryFeedback: ungrounded });
+  } catch (err) {
+    log(`  ⚠ retry failed (${(err as Error).message}); falling back to original plan.`);
+    return plan;
+  }
+  if (retried.metadata.steps.length === 0) {
+    log("  ⚠ retry produced an empty plan; falling back to original plan.");
+    return plan;
+  }
   const stillUngrounded = findUngroundedSelectors(extractSelectors(retried.spec), haystack);
   if (stillUngrounded.length === 0) {
     log("  retry succeeded — all selectors are grounded.");
