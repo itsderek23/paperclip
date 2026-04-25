@@ -91,6 +91,7 @@ export class OpenWebUiAdapter implements StackAdapter {
 
     return {
       baseUrl,
+      pid: proc.pid,
       shutdown: async () => {
         await shutdownProc(proc);
       },
@@ -107,7 +108,7 @@ export class OpenWebUiAdapter implements StackAdapter {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: ADMIN_NAME, email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
     });
-    if (signupRes.status !== 200 && signupRes.status !== 400) {
+    if (signupRes.status !== 200 && signupRes.status !== 400 && signupRes.status !== 403) {
       throw new Error(`POST /api/v1/auths/signup returned ${signupRes.status}: ${await signupRes.text()}`);
     }
 
@@ -168,7 +169,18 @@ export class OpenWebUiAdapter implements StackAdapter {
   }
 }
 
+const SEEDED_CHAT_TITLE = "Releasebot citations seed";
+
 async function seedChatWithCitations(baseUrl: string, token: string): Promise<string> {
+  const existing = await fetch(`${baseUrl}/api/v1/chats/list`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (existing.status === 200) {
+    const chats = (await existing.json()) as Array<{ id: string; title: string }>;
+    const match = chats.find((c) => c.title === SEEDED_CHAT_TITLE);
+    if (match) return match.id;
+  }
+
   const sources = [1, 2, 3, 4].map((n) => ({
     source: { name: `Releasebot Source ${n}`, url: `https://example.com/releasebot/${n}` },
     document: [`Releasebot seeded citation document ${n}.`],

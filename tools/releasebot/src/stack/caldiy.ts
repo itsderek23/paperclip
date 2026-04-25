@@ -78,6 +78,7 @@ export class CalDiyAdapter implements StackAdapter {
 
     return {
       baseUrl,
+      pid: proc.pid,
       shutdown: async () => {
         await shutdownProc(proc);
         await dropDatabase(adminUrl, dbName).catch(() => undefined);

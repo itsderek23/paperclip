@@ -29,6 +29,8 @@ interface Args {
   planFromCache: boolean;
   forceBroken: boolean;
   forceNoUi: boolean;
+  noReuse: boolean;
+  parallelBoot: boolean;
   stack: StackName;
   repo: string | undefined;
 }
@@ -63,7 +65,7 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
@@ -83,6 +85,8 @@ function parseArgs(argv: string[]): Args {
     planFromCache: flags.has("--plan-from-cache"),
     forceBroken: flags.has("--force-broken"),
     forceNoUi: flags.has("--force-no-ui"),
+    noReuse: flags.has("--no-reuse"),
+    parallelBoot: flags.has("--parallel-boot"),
     stack: stackRaw,
     repo: values.get("--repo") ?? process.env.RELEASEBOT_REPO,
   };
@@ -234,23 +238,68 @@ async function main(): Promise<void> {
   const beforePort = 3301;
   const afterPort = 3302;
 
-  log(`booting stack (before) on :${beforePort}...`);
-  let beforeStack;
-  try {
-    beforeStack = await adapter.boot(beforeWt, beforePort, beforeHome);
-  } catch (err) {
-    await writeBootFailureReport(artifactsDir, pr, "before", beforeWt, err as Error);
-    throw err;
+  const sides = [
+    { side: "before" as Side, wt: beforeWt, port: beforePort, home: beforeHome, sha: pr.baseSha },
+    { side: "after" as Side, wt: afterWt, port: afterPort, home: afterHome, sha: pr.headSha },
+  ];
+  const bootSide = async (s: (typeof sides)[number]) => {
+    if (!args.noReuse) {
+      const reused = await tryReuseStack(s.side, s.sha, prDir);
+      if (reused) {
+        log(`  reusing running ${s.side}-side at ${reused.baseUrl} (sha ${s.sha.slice(0, 7)})`);
+        return reused;
+      }
+    }
+    log(`  booting ${s.side}-side on :${s.port}...`);
+    const stack = await adapter.boot(s.wt, s.port, s.home);
+    await writeStackFingerprint(prDir, s.side, { sha: s.sha, pid: stack.pid ?? 0, port: s.port, baseUrl: stack.baseUrl });
+    const innerShutdown = stack.shutdown;
+    return {
+      ...stack,
+      shutdown: async () => {
+        await innerShutdown();
+        await clearStackFingerprint(prDir, s.side);
+      },
+    };
+  };
+
+  log(`booting stacks (before :${beforePort} / after :${afterPort}${args.parallelBoot ? ", parallel" : ""})...`);
+  const bootResults = args.parallelBoot
+    ? await Promise.allSettled(sides.map(bootSide))
+    : await (async () => {
+        const out: PromiseSettledResult<Awaited<ReturnType<typeof bootSide>>>[] = [];
+        for (const s of sides) {
+          try {
+            out.push({ status: "fulfilled", value: await bootSide(s) });
+          } catch (err) {
+            out.push({ status: "rejected", reason: err });
+            break;
+          }
+        }
+        while (out.length < sides.length) {
+          out.push({ status: "rejected", reason: new Error("skipped after prior failure") });
+        }
+        return out;
+      })();
+
+  const [beforeRes, afterRes] = bootResults;
+  if (beforeRes.status === "rejected" || afterRes.status === "rejected") {
+    if (beforeRes.status === "rejected" && (beforeRes.reason as Error).message !== "skipped after prior failure") {
+      await writeBootFailureReport(artifactsDir, pr, "before", beforeWt, beforeRes.reason as Error);
+    }
+    if (afterRes.status === "rejected" && (afterRes.reason as Error).message !== "skipped after prior failure") {
+      await writeBootFailureReport(artifactsDir, pr, "after", afterWt, afterRes.reason as Error);
+    }
+    if (beforeRes.status === "fulfilled") await beforeRes.value.shutdown().catch(() => undefined);
+    if (afterRes.status === "fulfilled") await afterRes.value.shutdown().catch(() => undefined);
+    const errs = [
+      beforeRes.status === "rejected" ? `before: ${(beforeRes.reason as Error).message}` : null,
+      afterRes.status === "rejected" ? `after: ${(afterRes.reason as Error).message}` : null,
+    ].filter(Boolean);
+    throw new Error(`stack boot failed — ${errs.join("; ")}`);
   }
-  let afterStack;
-  try {
-    log(`booting stack (after) on :${afterPort}...`);
-    afterStack = await adapter.boot(afterWt, afterPort, afterHome);
-  } catch (err) {
-    await writeBootFailureReport(artifactsDir, pr, "after", afterWt, err as Error);
-    await beforeStack.shutdown();
-    throw err;
-  }
+  const beforeStack = beforeRes.value;
+  const afterStack = afterRes.value;
 
   try {
     let fixtures: Awaited<ReturnType<NonNullable<typeof adapter.seed>>> | undefined;
@@ -346,6 +395,85 @@ async function main(): Promise<void> {
       log(`  worktrees removed; artifacts/ retained (${sizeMb} MB)`);
     }
   }
+}
+
+interface StackFingerprint {
+  sha: string;
+  pid: number;
+  port: number;
+  baseUrl: string;
+}
+
+function fingerprintPath(prDir: string, side: Side): string {
+  return path.join(prDir, ".stacks", `${side}.json`);
+}
+
+async function writeStackFingerprint(prDir: string, side: Side, fp: StackFingerprint): Promise<void> {
+  const fpPath = fingerprintPath(prDir, side);
+  await fs.mkdir(path.dirname(fpPath), { recursive: true });
+  await fs.writeFile(fpPath, JSON.stringify(fp));
+}
+
+async function clearStackFingerprint(prDir: string, side: Side): Promise<void> {
+  await fs.rm(fingerprintPath(prDir, side), { force: true });
+}
+
+async function tryReuseStack(side: Side, expectedSha: string, prDir: string): Promise<{ baseUrl: string; pid?: number; shutdown: () => Promise<void> } | null> {
+  const fpPath = fingerprintPath(prDir, side);
+  let fp: StackFingerprint;
+  try {
+    fp = JSON.parse(await fs.readFile(fpPath, "utf8")) as StackFingerprint;
+  } catch {
+    return null;
+  }
+  if (fp.sha !== expectedSha) {
+    await clearStackFingerprint(prDir, side);
+    return null;
+  }
+  try {
+    process.kill(fp.pid, 0);
+  } catch {
+    await clearStackFingerprint(prDir, side);
+    return null;
+  }
+  try {
+    await fetch(fp.baseUrl, { signal: AbortSignal.timeout(2_000) });
+  } catch {
+    await clearStackFingerprint(prDir, side);
+    return null;
+  }
+  return {
+    baseUrl: fp.baseUrl,
+    pid: fp.pid,
+    shutdown: async () => {
+      try {
+        process.kill(fp.pid, "SIGTERM");
+      } catch {}
+      const exited = await new Promise<boolean>((resolve) => {
+        const deadline = Date.now() + 5_000;
+        const tick = () => {
+          try {
+            process.kill(fp.pid, 0);
+          } catch {
+            resolve(true);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            resolve(false);
+            return;
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      });
+      if (!exited) {
+        try {
+          process.kill(fp.pid, "SIGKILL");
+        } catch {}
+      }
+      await clearStackFingerprint(prDir, side);
+    },
+  };
 }
 
 async function regenerateReport(artifactsDir: string): Promise<void> {

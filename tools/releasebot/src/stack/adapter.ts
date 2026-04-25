@@ -3,6 +3,7 @@ import type { AuthContext, FixtureSpec, FixtureSummary, Side } from "../types.ts
 export interface BootedStack {
   baseUrl: string;
   shutdown(): Promise<void>;
+  pid?: number;
 }
 
 export interface SeedContext {

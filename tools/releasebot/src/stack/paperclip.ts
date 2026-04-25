@@ -54,6 +54,7 @@ export class PaperclipAdapter implements StackAdapter {
 
     return {
       baseUrl,
+      pid: proc.pid,
       shutdown: () => shutdownProc(proc),
     };
   }
