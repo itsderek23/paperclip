@@ -1,23 +1,47 @@
 # releasebot (PoC)
 
-PR-replay visual QA for Paperclip. Given a PR number, checks out base + head into isolated worktrees, boots a Paperclip stack on each, drives local Playwright against both with a diff-generated plan, annotates and screenshots the surfaces that changed, LLM-reviews the before/after pairs, and emits a markdown + HTML report.
+PR-replay visual QA for Paperclip and other apps. Given a PR number, checks out base + head into isolated worktrees, boots a stack on each, drives local Playwright against both with a diff-generated plan, annotates and screenshots the surfaces that changed, LLM-reviews the before/after pairs, and emits a markdown + HTML report.
 
-Scope: proof of concept, local-only, not wired into CI. See `/Users/derek/.claude/plans/per-users-derek-downloads-releasebot-pit-elegant-backus.md` for the plan.
+Scope: proof of concept, local-only, not wired into CI. Three stack adapters today: `paperclip` (default), `caldiy`, `openwebui`. See `/Users/derek/.claude/plans/per-users-derek-downloads-releasebot-pit-elegant-backus.md` for the original plan.
 
 ## Usage
 
 ```
 # Requires: gh auth status working, .env.local with ANTHROPIC_API_KEY at repo root
 pnpm releasebot:pr 4224
+pnpm releasebot:pr 28944 --stack caldiy     --repo /path/to/cal.diy
+pnpm releasebot:pr 23918 --stack openwebui  --repo /path/to/open-webui
+
 pnpm releasebot:pr 4224 --plan-only          # stop after plan generation
 pnpm releasebot:pr 4224 --skip-install       # reuse existing worktrees (fails early if node_modules missing)
-pnpm releasebot:pr 4224 --keep-stacks        # leave servers running after report
+pnpm releasebot:pr 4224 --keep-stacks        # leave servers running after report; warms the SHA cache
+pnpm releasebot:pr 4224 --no-reuse           # force cold boot, ignore any warm SHA-keyed stacks
+pnpm releasebot:pr 4224 --parallel-boot      # boot before+after concurrently (regresses on CPU-bound hosts; default sequential)
 pnpm releasebot:pr 4224 --clean              # remove worktrees after run, keep artifacts/
 pnpm releasebot:pr 4224 --force-broken       # skip the upstream-CI preflight and run anyway
 pnpm releasebot:pr 4224 --force-no-ui        # skip the no-UI-surface triage and run anyway
 ```
 
-Artifacts land in `tmp/releasebot/<pr>/artifacts/`. Open `report.html` to see before/after pairs.
+Artifacts land in `<repoRoot>/tmp/releasebot/<pr>/artifacts/`. Open `report.html` to see before/after pairs. `<repoRoot>` is the target app, resolved from `--repo` (or `RELEASEBOT_REPO`); for paperclip itself, it defaults to the monorepo root.
+
+### Stack reuse: warm a base-SHA stack across PRs
+
+Booted stacks are registered by SHA at `<repoRoot>/tmp/releasebot/.stacks/<sha>.json`. On subsequent runs, if a fingerprint exists for the expected SHA *and* the recorded PID is alive *and* the URL responds within 2s *and* the stack name matches, the runner skips `adapter.boot()` entirely and reuses the running process. A reuser is a *consumer* — its shutdown is a no-op, so the stack survives the consumer's exit. Only the run that originally booted with `--keep-stacks` owns the stack's lifecycle.
+
+This unlocks a fast cross-PR QA loop. Most UI PRs branch from `main`, so the `before`-side stack is the same SHA across all of them:
+
+```
+# Step 1: warm a base-SHA stack once. Pick any PR whose base is the SHA you want warm.
+pnpm releasebot:pr <recent-PR-against-main> --stack paperclip --keep-stacks
+
+# Step 2: iterate. The warm before is reused; only the after-side fresh-boots per PR
+# (and gets cleaned up at exit, since these calls don't pass --keep-stacks).
+pnpm releasebot:pr <PR-A> --stack paperclip
+pnpm releasebot:pr <PR-B> --stack paperclip
+pnpm releasebot:pr <PR-C> --stack paperclip
+```
+
+Before each fresh boot, any stale fingerprint sitting on the target port with a different SHA is killed first, so the after-side can always claim port 3302 cleanly between PRs. Pass `--no-reuse` to force a cold boot.
 
 ### Preflight: upstream CI
 
@@ -25,7 +49,7 @@ Before spending time on worktrees + install + stack boots, the runner checks `gh
 
 ### Triage: no browsable UI surface
 
-If the diff has zero `.tsx`/`.jsx` changes under `ui/`, there's no surface a visual QA run can exercise. The runner exits with code 3 and writes a `report.md` flagging the skip rather than letting the planner scope-drift onto some incidental UI hunk. Use `--force-no-ui` to override.
+If the diff has zero `.tsx`/`.jsx`/`.svelte` changes under a UI-relevant path, there's no surface a visual QA run can exercise. The runner exits with code 3 and writes a `report.md` flagging the skip rather than letting the planner scope-drift onto some incidental UI hunk. Use `--force-no-ui` to override.
 
 ### Planner: grounded selectors with auto-retry
 
@@ -62,7 +86,9 @@ src/
   report.ts             # markdown + single-file HTML
   stack/
     adapter.ts          # StackAdapter interface (generic)
-    paperclip.ts        # PaperclipAdapter: boot + health + seed (paperclip-specific)
+    paperclip.ts        # PaperclipAdapter: boot + health + seed
+    caldiy.ts           # CalDiyAdapter: per-side Postgres DBs, NextAuth credentials login
+    openwebui.ts        # OpenWebUiAdapter: SQLite via DATA_DIR, signup-then-signin, seeded chat fixture
 ```
 
 The `stack/` seam is the extraction boundary: everything outside it is repo-agnostic. See the plan's "Extraction trigger" for when to split.
