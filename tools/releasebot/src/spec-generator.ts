@@ -35,6 +35,7 @@ function renderSpec(body: string, annotateImport: string): string {
   // markAnnotations([...]) up front; it does NOT call annotate() or
   // page.screenshot() itself.
   return `import { test, expect } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import { annotate, markAnnotations, readMarkedAnnotations } from "${annotateImport}";
 
 const SCREENSHOT_DIR = process.env.RELEASEBOT_SCREENSHOT_DIR ?? ".";
@@ -42,11 +43,51 @@ const SCREENSHOT_DIR = process.env.RELEASEBOT_SCREENSHOT_DIR ?? ".";
 test.afterEach(async ({ page }, testInfo) => {
   const m = testInfo.title.match(/step-(\\d+)/);
   if (!m) return;
-  const file = \`\${SCREENSHOT_DIR}/step-\${m[1]}.png\`;
+  const padded = m[1];
+  const screenshotFile = \`\${SCREENSHOT_DIR}/step-\${padded}.png\`;
+  const bboxesFile = \`\${SCREENSHOT_DIR}/step-\${padded}.bboxes.json\`;
+  const domFile = \`\${SCREENSHOT_DIR}/step-\${padded}.html\`;
   try {
     const selectors = readMarkedAnnotations(testInfo);
-    if (selectors.length > 0) await annotate(page, selectors);
-    await page.screenshot({ path: file });
+    let boxes: Array<{ selectorIndex: number; box: { x: number; y: number; width: number; height: number } }> = [];
+    if (selectors.length > 0) boxes = await annotate(page, selectors);
+
+    // Capture DOM snapshot before screenshot so the snapshot doesn't include
+    // the debug overlay; if it throws (e.g., page navigated away mid-test),
+    // continue — the screenshot is still source of truth.
+    try {
+      const html = await page.evaluate(() => {
+        const overlay = document.getElementById("__releasebot_overlay__");
+        if (overlay) overlay.remove();
+        return document.documentElement.outerHTML;
+      });
+      await writeFile(domFile, "<!doctype html>\\n" + html, "utf8");
+      // Re-draw the overlay if we have boxes; cheap and keeps the screenshot annotated.
+      if (boxes.length > 0) await annotate(page, selectors);
+    } catch {
+      // best-effort
+    }
+
+    await page.screenshot({ path: screenshotFile });
+
+    // Compute one union rect per selectorIndex so a multi-match selector
+    // (e.g. inline + sidebar) yields a single crop containing all instances.
+    if (boxes.length > 0) {
+      const byIdx = new Map<number, { x: number; y: number; width: number; height: number }>();
+      for (const { selectorIndex, box } of boxes) {
+        const cur = byIdx.get(selectorIndex);
+        if (!cur) { byIdx.set(selectorIndex, { ...box }); continue; }
+        const x = Math.min(cur.x, box.x);
+        const y = Math.min(cur.y, box.y);
+        const right = Math.max(cur.x + cur.width, box.x + box.width);
+        const bottom = Math.max(cur.y + cur.height, box.y + box.height);
+        byIdx.set(selectorIndex, { x, y, width: right - x, height: bottom - y });
+      }
+      const unions = [...byIdx.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, rect]) => rect);
+      await writeFile(bboxesFile, JSON.stringify(unions), "utf8");
+    }
   } catch {
     // page may be closed if test aborted early; best-effort only.
   }

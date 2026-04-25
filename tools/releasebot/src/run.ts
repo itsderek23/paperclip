@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Plan, Side, SideResult, StepResult } from "./types.ts";
+import type { BBox, Plan, Side, SideResult, StepResult } from "./types.ts";
 import { stepScreenshotName } from "./plan.ts";
 import { writeGeneratedSpec } from "./spec-generator.ts";
 
@@ -113,12 +113,14 @@ async function parseResults(
   for (let n = 1; n <= expectedStepCount; n++) {
     const tc = byNumber.get(n);
     const screenshot = path.join(screenshotDir, stepScreenshotName(n));
+    const bboxes = await readBboxesSidecar(screenshotDir, n);
     if (!tc) {
       steps.push({
         step_n: n,
         status: "fail",
         error: `No Playwright test matched step-${String(n).padStart(2, "0")}`,
         screenshot,
+        ...(bboxes ? { bboxes } : {}),
       });
       continue;
     }
@@ -126,9 +128,31 @@ async function parseResults(
     const status = lastResult?.status === "passed" ? "pass" : "fail";
     const error =
       status === "fail" ? summarizeError(lastResult) : undefined;
-    steps.push({ step_n: n, status, error, screenshot });
+    steps.push({ step_n: n, status, error, screenshot, ...(bboxes ? { bboxes } : {}) });
   }
   return steps;
+}
+
+async function readBboxesSidecar(dir: string, stepNumber: number): Promise<BBox[] | undefined> {
+  const file = path.join(dir, `step-${String(stepNumber).padStart(2, "0")}.bboxes.json`);
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const out: BBox[] = [];
+    for (const r of parsed) {
+      if (
+        r && typeof r === "object" &&
+        typeof r.x === "number" && typeof r.y === "number" &&
+        typeof r.width === "number" && typeof r.height === "number"
+      ) {
+        out.push({ x: r.x, y: r.y, width: r.width, height: r.height });
+      }
+    }
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function blankStepResults(count: number, screenshotDir: string, error: string): StepResult[] {

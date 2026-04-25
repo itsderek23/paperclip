@@ -1,6 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Plan, PrMeta, RunReview, SideResult } from "./types.ts";
+import sharp from "sharp";
+import type { BBox, Plan, PrMeta, RunReview, SideResult } from "./types.ts";
+
+const CROP_PAD = 40;
+const MIN_CROP_W = 200;
+const MIN_CROP_H = 120;
+const HUGE_CROP_THRESHOLD = 0.8;
+
+interface CropRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface StepCrop {
+  beforeCropRel: string;
+  afterCropRel: string;
+}
 
 export async function writeReport(args: {
   pr: PrMeta;
@@ -99,6 +117,26 @@ async function renderHtml(args: {
     const afterSrc = a ? path.relative(artifactsDir, a.screenshot) : "";
     const verdict = rv?.verdict ?? "pass";
     const obs = rv?.observation ?? "";
+    const crop = (b && a) ? await maybeBuildCrop(b.screenshot, a.screenshot, b.bboxes, a.bboxes, artifactsDir) : null;
+
+    const fullPair = `
+  <div class="pair">
+    <figure><figcaption>before · ${pr.baseSha.slice(0, 7)}</figcaption>${beforeSrc ? `<a href="${escapeAttr(beforeSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(beforeSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
+    <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption>${afterSrc ? `<a href="${escapeAttr(afterSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(afterSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
+  </div>`;
+
+    const focusBlock = crop
+      ? `
+  <div class="focus">
+    <p class="focus-label">Change focus</p>
+    <div class="pair pair-crop">
+      <figure><figcaption>before · ${pr.baseSha.slice(0, 7)}</figcaption><a href="${escapeAttr(crop.beforeCropRel)}" target="_blank" rel="noopener"><img src="${escapeAttr(crop.beforeCropRel)}" /></a></figure>
+      <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption><a href="${escapeAttr(crop.afterCropRel)}" target="_blank" rel="noopener"><img src="${escapeAttr(crop.afterCropRel)}" /></a></figure>
+    </div>
+  </div>
+  <details class="full-toggle"><summary>Show full screenshot</summary>${fullPair}</details>`
+      : fullPair;
+
     rows.push(`
 <section class="step verdict-${verdict}">
   <header>
@@ -108,10 +146,7 @@ async function renderHtml(args: {
   </header>
   <p class="meta"><code>${escapeHtml(step.url)}</code></p>
   ${obs ? `<p class="obs">${escapeHtml(obs)}</p>` : ""}
-  <div class="pair">
-    <figure><figcaption>before · ${pr.baseSha.slice(0, 7)}</figcaption>${beforeSrc ? `<a href="${escapeAttr(beforeSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(beforeSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
-    <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption>${afterSrc ? `<a href="${escapeAttr(afterSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(afterSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
-  </div>
+  ${focusBlock}
 </section>`);
   }
 
@@ -136,6 +171,14 @@ async function renderHtml(args: {
   .meta { color: #666; font-size: .85rem; margin: .25rem 0 .5rem; }
   .obs { margin: .5rem 0 .75rem; }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+  .pair-crop figure img { max-height: 360px; width: auto; max-width: 100%; margin: 0 auto; }
+  .pair-crop figure { display: flex; flex-direction: column; align-items: stretch; }
+  .pair-crop figure a { display: flex; justify-content: center; align-items: center; padding: .5rem; background: #fafafa; }
+  .focus { margin: 0 0 .75rem; }
+  .focus-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #555; margin: 0 0 .4rem; font-weight: 600; }
+  details.full-toggle { margin-top: .75rem; }
+  details.full-toggle > summary { cursor: pointer; font-size: .8rem; color: #555; padding: .35rem .5rem; border: 1px dashed #ccc; border-radius: 4px; display: inline-block; user-select: none; }
+  details.full-toggle[open] > summary { margin-bottom: .5rem; }
   figure { margin: 0; border: 1px solid #eee; border-radius: 6px; overflow: hidden; background: #fafafa; }
   figcaption { padding: .4rem .6rem; font-size: .75rem; color: #555; background: #f0f0f0; border-bottom: 1px solid #eee; }
   figure a { display: block; text-decoration: none; }
@@ -150,6 +193,9 @@ async function renderHtml(args: {
     figure { background: #1a1a1d; border-color: #333; }
     figcaption { background: #222; border-color: #333; color: #bbb; }
     code { background: #26262a; }
+    .focus-label { color: #aaa; }
+    details.full-toggle > summary { color: #aaa; border-color: #444; }
+    .pair-crop figure a { background: #1a1a1d; }
   }
 </style>
 </head><body>
@@ -175,6 +221,98 @@ function verdictLabel(v: string): string {
   if (v === "pass") return "✓ pass";
   if (v === "intentional_change") return "◆ intentional change";
   return "✗ fail";
+}
+
+function unionRect(boxes: BBox[]): BBox {
+  let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const b of boxes) {
+    if (b.x < x) x = b.x;
+    if (b.y < y) y = b.y;
+    if (b.x + b.width > right) right = b.x + b.width;
+    if (b.y + b.height > bottom) bottom = b.y + b.height;
+  }
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function expandToMin(rect: CropRect, imgW: number, imgH: number): CropRect {
+  let { left, top, width, height } = rect;
+  if (width < MIN_CROP_W) {
+    const need = MIN_CROP_W - width;
+    const grow = Math.min(left, Math.floor(need / 2));
+    left -= grow;
+    width += grow;
+    width = Math.min(MIN_CROP_W, width + Math.min(imgW - (left + width), need - grow));
+  }
+  if (height < MIN_CROP_H) {
+    const need = MIN_CROP_H - height;
+    const grow = Math.min(top, Math.floor(need / 2));
+    top -= grow;
+    height += grow;
+    height = Math.min(MIN_CROP_H, height + Math.min(imgH - (top + height), need - grow));
+  }
+  // Final clamp.
+  left = Math.max(0, left);
+  top = Math.max(0, top);
+  width = Math.min(width, imgW - left);
+  height = Math.min(height, imgH - top);
+  return { left, top, width, height };
+}
+
+async function maybeBuildCrop(
+  beforePath: string,
+  afterPath: string,
+  beforeBboxes: BBox[] | undefined,
+  afterBboxes: BBox[] | undefined,
+  artifactsDir: string,
+): Promise<StepCrop | null> {
+  const candidates: BBox[] = [];
+  if (beforeBboxes && beforeBboxes.length) candidates.push(...beforeBboxes);
+  if (afterBboxes && afterBboxes.length) candidates.push(...afterBboxes);
+  if (candidates.length === 0) return null;
+
+  let imgW: number, imgH: number;
+  try {
+    const meta = await sharp(afterPath).metadata();
+    imgW = meta.width ?? 0;
+    imgH = meta.height ?? 0;
+    if (!imgW || !imgH) return null;
+  } catch {
+    return null;
+  }
+
+  const u = unionRect(candidates);
+  if (u.width >= imgW * HUGE_CROP_THRESHOLD && u.height >= imgH * HUGE_CROP_THRESHOLD) return null;
+
+  const padded: CropRect = {
+    left: Math.max(0, Math.round(u.x - CROP_PAD)),
+    top: Math.max(0, Math.round(u.y - CROP_PAD)),
+    width: 0,
+    height: 0,
+  };
+  const right = Math.min(imgW, Math.round(u.x + u.width + CROP_PAD));
+  const bottom = Math.min(imgH, Math.round(u.y + u.height + CROP_PAD));
+  padded.width = Math.max(1, right - padded.left);
+  padded.height = Math.max(1, bottom - padded.top);
+
+  const rect = expandToMin(padded, imgW, imgH);
+  if (rect.width < 2 || rect.height < 2) return null;
+
+  const beforeOut = beforePath.replace(/\.png$/, ".crop.png");
+  const afterOut = afterPath.replace(/\.png$/, ".crop.png");
+
+  try {
+    await Promise.all([
+      sharp(beforePath).extract(rect).toFile(beforeOut),
+      sharp(afterPath).extract(rect).toFile(afterOut),
+    ]);
+  } catch {
+    return null;
+  }
+
+  return {
+    beforeCropRel: path.relative(artifactsDir, beforeOut),
+    afterCropRel: path.relative(artifactsDir, afterOut),
+  };
 }
 
 function escapeHtml(s: string): string {

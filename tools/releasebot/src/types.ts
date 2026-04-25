@@ -28,11 +28,23 @@ export interface Plan {
 
 export type Side = "before" | "after";
 
+export interface BBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface StepResult {
   step_n: number;
   status: "pass" | "fail";
   error?: string;
   screenshot: string;
+  /** Union rect per selector index, in page (CSS) pixel coordinates. Captured
+   * at run time by the spec's afterEach hook from `annotate()`'s return value.
+   * Absent when the test had no markAnnotations() call or when no selector
+   * resolved. Used by the report to crop focus-mode images. */
+  bboxes?: BBox[];
 }
 
 export interface SideResult {

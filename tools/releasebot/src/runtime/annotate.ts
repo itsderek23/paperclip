@@ -37,6 +37,11 @@ export function readMarkedAnnotations(
   return [];
 }
 
+export interface AnnotationBox {
+  selectorIndex: number;
+  box: { x: number; y: number; width: number; height: number };
+}
+
 /**
  * Draws red outline overlays around every match of each selector and labels
  * them with the 1-based index of the selector they came from. Call immediately
@@ -50,12 +55,12 @@ export function readMarkedAnnotations(
  *
  * Missing selectors are silently skipped (no throw) — this is a visual aid,
  * not an assertion.
+ *
+ * Returns the resolved bounding boxes so the caller can persist them as
+ * structured data (used for focus-mode crops in the report).
  */
-export async function annotate(page: Page, selectors: string[]): Promise<void> {
-  const boxes: Array<{
-    selectorIndex: number;
-    box: { x: number; y: number; width: number; height: number };
-  }> = [];
+export async function annotate(page: Page, selectors: string[]): Promise<AnnotationBox[]> {
+  const boxes: AnnotationBox[] = [];
 
   for (const [selectorIndex, sel] of selectors.entries()) {
     try {
@@ -112,4 +117,6 @@ export async function annotate(page: Page, selectors: string[]): Promise<void> {
     }
     document.body.appendChild(overlay);
   }, boxes);
+
+  return boxes;
 }

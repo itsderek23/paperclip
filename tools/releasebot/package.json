@@ -12,7 +12,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.70.0",
     "@playwright/test": "^1.58.2",
-    "playwright": "^1.58.2"
+    "playwright": "^1.58.2",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
