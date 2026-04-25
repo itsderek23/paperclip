@@ -3,8 +3,8 @@ import path from "node:path";
 
 const CONTEXT_LINES_BEFORE = 12;
 const CONTEXT_LINES_AFTER = 24;
-const MAX_HUNKS = 24;
-const MAX_TOTAL_CHARS = 60_000;
+const MAX_HUNKS = 60;
+const MAX_TOTAL_CHARS = 150_000;
 
 /**
  * Parse the unified diff and extract source context around each hunk — read from

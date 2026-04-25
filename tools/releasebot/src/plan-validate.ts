@@ -42,11 +42,15 @@ export function findUngroundedSelectors(selectors: string[], sourceContext: stri
   const haystack = sourceContext.toLowerCase();
   const ungrounded: string[] = [];
   for (const sel of selectors) {
-    const needle = sel.toLowerCase();
+    const needle = normalizeForGrounding(sel);
     if (needle.length < 3) continue;
     if (!haystack.includes(needle)) ungrounded.push(sel);
   }
   return ungrounded;
+}
+
+function normalizeForGrounding(s: string): string {
+  return s.toLowerCase().trim().replace(/^[.,!?:;…\s]+|[.,!?:;…\s]+$/g, "");
 }
 
 /**
