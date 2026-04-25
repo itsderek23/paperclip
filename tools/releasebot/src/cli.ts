@@ -244,21 +244,22 @@ async function main(): Promise<void> {
   ];
   const bootSide = async (s: (typeof sides)[number]) => {
     if (!args.noReuse) {
-      const reused = await tryReuseStack(s.side, s.sha, prDir);
+      const reused = await tryReuseStack(s.sha, args.stack, repoRoot);
       if (reused) {
         log(`  reusing running ${s.side}-side at ${reused.baseUrl} (sha ${s.sha.slice(0, 7)})`);
         return reused;
       }
     }
+    await evictStackOnPort(repoRoot, s.port, s.sha);
     log(`  booting ${s.side}-side on :${s.port}...`);
     const stack = await adapter.boot(s.wt, s.port, s.home);
-    await writeStackFingerprint(prDir, s.side, { sha: s.sha, pid: stack.pid ?? 0, port: s.port, baseUrl: stack.baseUrl });
+    await writeStackFingerprint(repoRoot, { sha: s.sha, pid: stack.pid ?? 0, port: s.port, baseUrl: stack.baseUrl, stack: args.stack });
     const innerShutdown = stack.shutdown;
     return {
       ...stack,
       shutdown: async () => {
         await innerShutdown();
-        await clearStackFingerprint(prDir, s.side);
+        await clearStackFingerprint(repoRoot, s.sha);
       },
     };
   };
@@ -402,78 +403,79 @@ interface StackFingerprint {
   pid: number;
   port: number;
   baseUrl: string;
+  stack: string;
 }
 
-function fingerprintPath(prDir: string, side: Side): string {
-  return path.join(prDir, ".stacks", `${side}.json`);
+function stacksDir(repoRoot: string): string {
+  return path.join(repoRoot, "tmp", "releasebot", ".stacks");
 }
 
-async function writeStackFingerprint(prDir: string, side: Side, fp: StackFingerprint): Promise<void> {
-  const fpPath = fingerprintPath(prDir, side);
+function fingerprintPath(repoRoot: string, sha: string): string {
+  return path.join(stacksDir(repoRoot), `${sha}.json`);
+}
+
+async function writeStackFingerprint(repoRoot: string, fp: StackFingerprint): Promise<void> {
+  const fpPath = fingerprintPath(repoRoot, fp.sha);
   await fs.mkdir(path.dirname(fpPath), { recursive: true });
   await fs.writeFile(fpPath, JSON.stringify(fp));
 }
 
-async function clearStackFingerprint(prDir: string, side: Side): Promise<void> {
-  await fs.rm(fingerprintPath(prDir, side), { force: true });
+async function clearStackFingerprint(repoRoot: string, sha: string): Promise<void> {
+  await fs.rm(fingerprintPath(repoRoot, sha), { force: true });
 }
 
-async function tryReuseStack(side: Side, expectedSha: string, prDir: string): Promise<{ baseUrl: string; pid?: number; shutdown: () => Promise<void> } | null> {
-  const fpPath = fingerprintPath(prDir, side);
+async function tryReuseStack(expectedSha: string, expectedStack: string, repoRoot: string): Promise<{ baseUrl: string; pid?: number; shutdown: () => Promise<void> } | null> {
+  const fpPath = fingerprintPath(repoRoot, expectedSha);
   let fp: StackFingerprint;
   try {
     fp = JSON.parse(await fs.readFile(fpPath, "utf8")) as StackFingerprint;
   } catch {
     return null;
   }
-  if (fp.sha !== expectedSha) {
-    await clearStackFingerprint(prDir, side);
+  if (fp.sha !== expectedSha || fp.stack !== expectedStack) {
+    await clearStackFingerprint(repoRoot, expectedSha);
     return null;
   }
   try {
     process.kill(fp.pid, 0);
   } catch {
-    await clearStackFingerprint(prDir, side);
+    await clearStackFingerprint(repoRoot, expectedSha);
     return null;
   }
   try {
     await fetch(fp.baseUrl, { signal: AbortSignal.timeout(2_000) });
   } catch {
-    await clearStackFingerprint(prDir, side);
+    await clearStackFingerprint(repoRoot, expectedSha);
     return null;
   }
   return {
     baseUrl: fp.baseUrl,
     pid: fp.pid,
     shutdown: async () => {
-      try {
-        process.kill(fp.pid, "SIGTERM");
-      } catch {}
-      const exited = await new Promise<boolean>((resolve) => {
-        const deadline = Date.now() + 5_000;
-        const tick = () => {
-          try {
-            process.kill(fp.pid, 0);
-          } catch {
-            resolve(true);
-            return;
-          }
-          if (Date.now() >= deadline) {
-            resolve(false);
-            return;
-          }
-          setTimeout(tick, 100);
-        };
-        tick();
-      });
-      if (!exited) {
-        try {
-          process.kill(fp.pid, "SIGKILL");
-        } catch {}
-      }
-      await clearStackFingerprint(prDir, side);
+      // Reusers are consumers, not owners — leave the stack alone so the original
+      // --keep-stacks invocation can keep iterating against it.
     },
   };
+}
+
+async function evictStackOnPort(repoRoot: string, port: number, keepSha: string): Promise<void> {
+  const dir = stacksDir(repoRoot);
+  const files = await fs.readdir(dir).catch(() => []);
+  for (const f of files) {
+    if (!f.endsWith(".json")) continue;
+    const fpPath = path.join(dir, f);
+    let fp: StackFingerprint;
+    try {
+      fp = JSON.parse(await fs.readFile(fpPath, "utf8")) as StackFingerprint;
+    } catch {
+      continue;
+    }
+    if (fp.port !== port || fp.sha === keepSha) continue;
+    try {
+      process.kill(fp.pid, "SIGTERM");
+    } catch {}
+    await fs.rm(fpPath, { force: true });
+  }
 }
 
 async function regenerateReport(artifactsDir: string): Promise<void> {
