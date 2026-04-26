@@ -143,7 +143,13 @@ export async function reviseSeedFromFailure(args: {
     return { cannotExtend: true, reason: `LLM response was not parseable JSON: ${(err as Error).message}` };
   }
   if (!parsed.extensionEntities || !Array.isArray(parsed.extensionEntities) || parsed.extensionEntities.length === 0) {
-    return { cannotExtend: true, reason: "LLM returned no extension entities." };
+    // The LLM may have returned a rationale explaining why it declined to extend
+    // (e.g. it saw from the screenshot that the page is the wrong one). Surface
+    // that reason if present so the report can show why we didn't try.
+    const rationale = typeof parsed.rationale === "string" && parsed.rationale.trim().length > 0
+      ? parsed.rationale.trim()
+      : "no rationale provided";
+    return { cannotExtend: true, reason: `LLM returned no extension entities. Rationale: ${rationale}` };
   }
   // Validate that names don't collide with existing fixtures.
   for (const e of parsed.extensionEntities) {
