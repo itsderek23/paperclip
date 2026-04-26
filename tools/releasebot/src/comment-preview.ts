@@ -45,6 +45,13 @@ export function buildCommentPreviewHtml(args: {
     background: #fff8c5; border: 1px solid #d4a72c66;
     border-radius: 6px; padding: 8px 12px; margin: 0 0 1rem;
   }
+  .pr-title {
+    font-size: 32px; font-weight: 400; line-height: 1.25;
+    margin: 0 0 16px; color: #1f2328;
+  }
+  .pr-title .pr-number { color: #59636e; font-weight: 300; }
+  .pr-title a { color: inherit; text-decoration: none; }
+  .pr-title a:hover { color: #0969da; }
   .timeline-item { display: flex; gap: 16px; margin-bottom: 16px; }
   .avatar {
     width: 40px; height: 40px; border-radius: 50%;
@@ -140,11 +147,16 @@ export function buildCommentPreviewHtml(args: {
   Images load from this directory's <code>before/</code> and <code>after/</code> screenshots.
 </p>
 
+<h1 class="pr-title">
+  <a href="${escapeAttr(pr.url)}">${escapeHtml(pr.title)}</a>
+  <span class="pr-number">#${pr.number}</span>
+</h1>
+
 <div class="timeline-item">
   <div class="avatar avatar-author">PR</div>
   <div class="comment">
     <div class="comment-header">
-      <strong>PR description</strong> · <a href="${escapeAttr(pr.url)}">${escapeHtml(pr.title)}</a>
+      <strong>PR description</strong>
     </div>
     <div class="comment-body">
 ${prBodyHtml}
