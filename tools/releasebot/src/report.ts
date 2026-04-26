@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { buildCommentMarkdown } from "./comment.ts";
+import { buildCommentPreviewHtml } from "./comment-preview.ts";
 import type { BBox, Plan, PrMeta, RunReview, SideResult } from "./types.ts";
 
 const CROP_PAD = 40;
@@ -27,15 +29,21 @@ export async function writeReport(args: {
   after: SideResult;
   review: RunReview;
   artifactsDir: string;
-}): Promise<{ markdownPath: string; htmlPath: string }> {
+}): Promise<{ markdownPath: string; htmlPath: string; commentPath: string; previewPath: string }> {
   const { pr, plan, before, after, review, artifactsDir } = args;
   const markdownPath = path.join(artifactsDir, "report.md");
   const htmlPath = path.join(artifactsDir, "report.html");
+  const commentPath = path.join(artifactsDir, "comment.md");
+  const previewPath = path.join(artifactsDir, "comment-preview.html");
 
   await fs.writeFile(markdownPath, renderMarkdown({ pr, plan, before, after, review }));
   await fs.writeFile(htmlPath, await renderHtml({ pr, plan, before, after, review, artifactsDir }));
 
-  return { markdownPath, htmlPath };
+  const commentMarkdown = await buildCommentMarkdown({ pr, plan, before, after, artifactsDir });
+  await fs.writeFile(commentPath, commentMarkdown);
+  await fs.writeFile(previewPath, buildCommentPreviewHtml({ pr, commentMarkdown }));
+
+  return { markdownPath, htmlPath, commentPath, previewPath };
 }
 
 function renderMarkdown(args: {

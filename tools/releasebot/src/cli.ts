@@ -374,7 +374,7 @@ async function main(): Promise<void> {
     await fs.writeFile(path.join(artifactsDir, "review.json"), JSON.stringify(review, null, 2));
 
     log("writing report...");
-    const { markdownPath, htmlPath } = await writeReport({
+    const { markdownPath, htmlPath, commentPath, previewPath } = await writeReport({
       pr,
       plan,
       before: beforeResult,
@@ -383,7 +383,7 @@ async function main(): Promise<void> {
       artifactsDir,
     });
 
-    printSummary(plan, review, markdownPath, htmlPath);
+    printSummary(plan, review, { markdownPath, htmlPath, commentPath, previewPath });
   } finally {
     if (!args.keepStacks) {
       log("shutting down stacks...");
@@ -494,9 +494,11 @@ async function regenerateReport(artifactsDir: string): Promise<void> {
   const review = (await read("review.json")) as Parameters<typeof writeReport>[0]["review"];
   const before = (await read(path.join("before", "steps.json"))) as Parameters<typeof writeReport>[0]["before"];
   const after = (await read(path.join("after", "steps.json"))) as Parameters<typeof writeReport>[0]["after"];
-  const { markdownPath, htmlPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
+  const { markdownPath, htmlPath, commentPath, previewPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
   log(`  markdown: ${markdownPath}`);
   log(`  html:     ${htmlPath}`);
+  log(`  comment:  ${commentPath}`);
+  log(`  preview:  ${previewPath}`);
 }
 
 async function rereviewFromCache(artifactsDir: string, apiKey: string): Promise<void> {
@@ -511,12 +513,14 @@ async function rereviewFromCache(artifactsDir: string, apiKey: string): Promise<
   const review = await reviewRun(pr, plan, before, after, { apiKey });
   await fs.writeFile(path.join(artifactsDir, "review.json"), JSON.stringify(review, null, 2));
   log("  writing report...");
-  const { markdownPath, htmlPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
+  const { markdownPath, htmlPath, commentPath, previewPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
   console.log("");
   console.log(`  ${review.summary}`);
   console.log("");
   log(`  markdown: ${markdownPath}`);
   log(`  html:     ${htmlPath}`);
+  log(`  comment:  ${commentPath}`);
+  log(`  preview:  ${previewPath}`);
 }
 
 async function replanFromCache(artifactsDir: string, apiKey: string): Promise<void> {
@@ -570,15 +574,21 @@ function printPlan(plan: Plan): void {
   console.log("");
 }
 
-function printSummary(plan: Plan, review: { summary: string; steps: Array<{ verdict: string }> }, md: string, html: string): void {
+function printSummary(
+  plan: Plan,
+  review: { summary: string; steps: Array<{ verdict: string }> },
+  paths: { markdownPath: string; htmlPath: string; commentPath: string; previewPath: string },
+): void {
   const counts: Record<string, number> = {};
   for (const s of review.steps) counts[s.verdict] = (counts[s.verdict] ?? 0) + 1;
   console.log("");
   console.log(`  ${plan.metadata.steps.length} step(s): ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")}`);
   console.log(`  ${review.summary}`);
   console.log("");
-  console.log(`  markdown: ${md}`);
-  console.log(`  html:     ${html}`);
+  console.log(`  markdown: ${paths.markdownPath}`);
+  console.log(`  html:     ${paths.htmlPath}`);
+  console.log(`  comment:  ${paths.commentPath}`);
+  console.log(`  preview:  ${paths.previewPath}`);
   console.log("");
 }
 
