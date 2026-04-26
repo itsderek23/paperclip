@@ -61,8 +61,19 @@ export interface StepRepairRecord {
    *  recovered the failure.
    *  "seed_extension_failed" — Shape B detected; seed extension was attempted
    *  but either the LLM declined (CANNOT_EXTEND), apply failed, or the post-extension
-   *  rerun still didn't pass. */
-  outcome: "applied" | "skipped_shape_b" | "failed" | "seed_extended" | "seed_extension_failed";
+   *  rerun still didn't pass.
+   *  "url_rewritten" — triage chose rewrite_url; we substituted the goto URL
+   *  and re-ran. status pass/fail reflects the rerun.
+   *  "triage_give_up" — triage diagnosed the failure as un-repairable (real
+   *  regression, contradictory evidence, or unsynthesizable affordance). */
+  outcome:
+    | "applied"
+    | "skipped_shape_b"
+    | "failed"
+    | "seed_extended"
+    | "seed_extension_failed"
+    | "url_rewritten"
+    | "triage_give_up";
   reason: string;
   originalError: string;
   originalTestBody?: string;
@@ -121,3 +132,9 @@ export interface AuthContext {
   storageStatePath: string;
   description: string;
 }
+
+export type TriageAction =
+  | { kind: "rewrite_locator"; reason: string }
+  | { kind: "rewrite_url"; reason: string; suggestedUrl: string }
+  | { kind: "extend_seed"; reason: string }
+  | { kind: "give_up"; reason: string };

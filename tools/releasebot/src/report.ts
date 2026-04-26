@@ -193,11 +193,15 @@ async function renderHtml(args: {
   .repair-badge { font-size: .75rem; padding: .15rem .45rem; border-radius: 4px; font-weight: 600; }
   .repair-applied.repair-badge { background: #fff4d6; color: #7a5b00; }
   .repair-seed_extended.repair-badge { background: #dff3df; color: #2a6d2a; }
+  .repair-url_rewritten.repair-badge { background: #e3ecfa; color: #1f4a94; }
+  .repair-triage_give_up.repair-badge { background: #f1f1f3; color: #555; }
   .repair-skipped_shape_b.repair-badge { background: #fde7e7; color: #962727; }
   .repair-failed.repair-badge { background: #fde7e7; color: #962727; }
   .repair-seed_extension_failed.repair-badge { background: #fde7e7; color: #962727; }
   .repair-block { background: #fff8e6; border: 1px solid #f1d97f; border-radius: 6px; padding: .75rem 1rem; margin: .75rem 0; }
   .repair-block.repair-seed_extended { background: #f0faf0; border-color: #b8d8b8; }
+  .repair-block.repair-url_rewritten { background: #eef3fb; border-color: #b8c8e0; }
+  .repair-block.repair-triage_give_up { background: #f4f4f6; border-color: #d0d0d4; }
   .repair-block.repair-skipped_shape_b, .repair-block.repair-failed, .repair-block.repair-seed_extension_failed { background: #fdecec; border-color: #f1bcbc; }
   .repair-seed-rationale { margin: 0 0 .35rem; font-size: .9rem; color: #2a4d2a; }
   .repair-added-entities { color: #5a7a5a; font-size: .85rem; }
@@ -245,11 +249,13 @@ function verdictLabel(v: string): string {
   return "✗ fail";
 }
 
-function repairBadgeLabel(outcome: "applied" | "skipped_shape_b" | "failed" | "seed_extended" | "seed_extension_failed"): string {
+function repairBadgeLabel(outcome: "applied" | "skipped_shape_b" | "failed" | "seed_extended" | "seed_extension_failed" | "url_rewritten" | "triage_give_up"): string {
   if (outcome === "applied") return "🛠 repaired from DOM";
   if (outcome === "seed_extended") return "🌱 seed extended";
+  if (outcome === "url_rewritten") return "🔀 URL rewritten";
   if (outcome === "skipped_shape_b") return "⚠ fixture gap";
   if (outcome === "seed_extension_failed") return "⚠ seed extension failed";
+  if (outcome === "triage_give_up") return "? triage gave up";
   return "⚠ repair failed";
 }
 
