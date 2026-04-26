@@ -79,6 +79,7 @@ export async function runRepairPass(args: {
         failedStepUrl: stepMeta.url,
         failureSummary: errorText,
         domHtml,
+        screenshotPath: path.join(screenshotDir, `step-${padded}.png`),
       });
       if ("error" in extResult) {
         log(`  repair step ${padded}: ${extResult.error}; marking inconclusive.`);
@@ -503,8 +504,9 @@ async function tryExtendSeed(opts: {
   failedStepUrl: string;
   failureSummary: string;
   domHtml: string;
+  screenshotPath: string;
 }): Promise<ExtendSeedSuccess | { error: string }> {
-  const { apiKey, artifactsDir, afterBaseUrl, failedStepDescription, failedStepUrl, failureSummary, domHtml } = opts;
+  const { apiKey, artifactsDir, afterBaseUrl, failedStepDescription, failedStepUrl, failureSummary, domHtml, screenshotPath } = opts;
 
   // Idempotency guard: if a previous run already extended the seed for this PR/SHA, skip the
   // LLM call and the apply (POSTs are not idempotent — re-running would create duplicates).
@@ -535,6 +537,15 @@ async function tryExtendSeed(opts: {
     return { error: `could not read diff.patch: ${(err as Error).message}` };
   }
 
+  // Screenshot is optional — we send it multimodally so the LLM can visually
+  // confirm the page is the intended one (vs. a 404 / wrong-page navigation).
+  let screenshotBytes: Uint8Array | undefined;
+  try {
+    screenshotBytes = await fs.readFile(screenshotPath);
+  } catch {
+    // OK — fall back to text-only.
+  }
+
   let revision: Awaited<ReturnType<typeof reviseSeedFromFailure>>;
   try {
     revision = await reviseSeedFromFailure({
@@ -546,6 +557,7 @@ async function tryExtendSeed(opts: {
       failureSummary,
       domHtml,
       diff,
+      screenshotBytes,
     });
   } catch (err) {
     return { error: `seed-revision LLM call threw: ${(err as Error).message}` };

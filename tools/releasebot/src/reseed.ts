@@ -50,6 +50,10 @@ export async function reviseSeedFromFailure(args: {
   failureSummary: string;
   domHtml: string;
   diff: string;
+  /** PNG bytes of the page at moment of failure. Optional — when supplied,
+   * sent multimodally so the LLM can visually confirm the page is the one
+   * the test intended (vs. a 404 / "not found" / loading state). */
+  screenshotBytes?: Uint8Array;
 }): Promise<ReviseResult | { cannotExtend: true; reason: string }> {
   const {
     apiKey,
@@ -60,6 +64,7 @@ export async function reviseSeedFromFailure(args: {
     failureSummary,
     domHtml,
     diff,
+    screenshotBytes,
   } = args;
   const client = new Anthropic({ apiKey });
   const trimmedHtml = stripNoiseFromHtml(domHtml).slice(0, 120_000);
@@ -94,11 +99,31 @@ export async function reviseSeedFromFailure(args: {
     "```",
   ].join("\n");
 
+  const userBlocks: Anthropic.Messages.ContentBlockParam[] = [
+    { type: "text", text: userContent },
+  ];
+  if (screenshotBytes && screenshotBytes.length > 0) {
+    userBlocks.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: "image/png",
+        data: Buffer.from(screenshotBytes).toString("base64"),
+      },
+    });
+    userBlocks.push({
+      type: "text",
+      text:
+        "Above is a screenshot of the page at the moment of failure. Use it to confirm the test actually reached the page it intended. " +
+        "If the screenshot shows a 404 / Not Found / Loading / generic error / wrong-page state, output CANNOT_EXTEND with reason \"page is not the intended one (likely a navigation problem, not a fixture coverage gap)\" — adding more seed data WILL NOT help. " +
+        "Only propose extension entities when the screenshot shows the correct page rendered with the affordance genuinely missing.",
+    });
+  }
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: 3000,
     system: REVISE_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userContent }],
+    messages: [{ role: "user", content: userBlocks }],
   });
   const text = resp.content
     .flatMap((b) => (b.type === "text" ? [b.text] : []))
