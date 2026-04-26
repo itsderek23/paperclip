@@ -40,6 +40,12 @@ export interface StepResult {
   status: "pass" | "fail" | "inconclusive";
   error?: string;
   screenshot: string;
+  /** Path to the unannotated screenshot captured before the red-outline overlay
+   * is injected. Lives next to `screenshot` with a `.raw.png` extension. Used by
+   * report-time code to re-render outlines / re-crop offline without re-running
+   * Playwright. Optional so older cached `steps.json` files (pre-this-field)
+   * still deserialize. */
+  rawScreenshot?: string;
   /** Union rect per selector index, in page (CSS) pixel coordinates. Captured
    * at run time by the spec's afterEach hook from `annotate()`'s return value.
    * Absent when the test had no markAnnotations() call or when no selector

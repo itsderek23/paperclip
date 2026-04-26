@@ -45,9 +45,14 @@ test.afterEach(async ({ page }, testInfo) => {
   if (!m) return;
   const padded = m[1];
   const screenshotFile = \`\${SCREENSHOT_DIR}/step-\${padded}.png\`;
+  const rawScreenshotFile = \`\${SCREENSHOT_DIR}/step-\${padded}.raw.png\`;
   const bboxesFile = \`\${SCREENSHOT_DIR}/step-\${padded}.bboxes.json\`;
   const domFile = \`\${SCREENSHOT_DIR}/step-\${padded}.html\`;
   try {
+    // Capture the raw, unannotated screenshot first so report-time code can
+    // re-render outlines / re-crop offline without booting Playwright again.
+    await page.screenshot({ path: rawScreenshotFile });
+
     const selectors = readMarkedAnnotations(testInfo);
     let boxes: Array<{ selectorIndex: number; box: { x: number; y: number; width: number; height: number } }> = [];
     if (selectors.length > 0) boxes = await annotate(page, selectors);
