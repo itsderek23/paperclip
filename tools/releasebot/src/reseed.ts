@@ -6,11 +6,9 @@ import { AVAILABLE_ENDPOINTS, executeSpec } from "./stack/paperclip-seed.ts";
 
 const MODEL = "claude-opus-4-7";
 
-const REVISE_SYSTEM_PROMPT = `You are extending a seeded fixture set so a Playwright test can exercise an affordance that requires specific data shape.
+const REVISE_SYSTEM_PROMPT = `You are extending a seeded fixture set. Upstream triage has already decided that the failing test needs additional fixture data to render its affordance — your job is to propose the entities, not to second-guess whether extension is appropriate.
 
-The Playwright step failed because the affordance is NOT rendered in the page's DOM. We have already verified that none of the test's literal selectors appear anywhere in the rendered HTML. The most likely reason is that the seeded fixtures don't include the data shape the affordance needs (e.g. a parent issue with sub-tasks, an issue with a specific status, an issue blocked by another, etc.).
-
-Your job: emit a JSON array of NEW \`FixtureSpecEntity\` objects to be APPENDED to the existing seed. The new entities will be POSTed in order, after the original seed has already run, and may reference existing fixtures via \`{{name.field}}\` interpolation.
+Emit a JSON array of NEW \`FixtureSpecEntity\` objects to be APPENDED to the existing seed. The new entities will be POSTed in order, after the original seed has already run, and may reference existing fixtures via \`{{name.field}}\` interpolation.
 
 ${AVAILABLE_ENDPOINTS}
 
@@ -33,8 +31,8 @@ Rules:
 - DO NOT repeat entities that already exist in the seed. The user message lists their names + captured fields.
 - MAY reference existing fixtures by name. Example: \`"endpoint": "POST /api/companies/{{company.id}}/issues"\`.
 - DO NOT invent endpoints, fields, or relationships not in AVAILABLE_ENDPOINTS.
-- If the affordance the failing step wants requires data the listed endpoints CAN'T create (e.g. needs an admin role, a stale timestamp, a feature flag, or an external service), output the literal string \`CANNOT_EXTEND\` followed by one sentence explaining why. Do not invent a passing-looking extension.
-- Keep entity bodies realistic — meaningful titles/names that match what the PR's UI is checking for. The point is to make the affordance actually render, not just to add filler.`;
+- Keep entity bodies realistic — meaningful titles/names that match what the PR's UI is checking for. The point is to make the affordance actually render, not just to add filler.
+- If the available endpoints genuinely cannot create the data shape (e.g. it needs an admin role, a stale timestamp, a feature flag, or an external service), output the literal string \`CANNOT_EXTEND\` followed by one sentence explaining the structural blocker. This is the ONLY reason to decline — do not decline based on visual signals (triage already considered those).`;
 
 export interface ReviseResult {
   rationale: string;
@@ -114,9 +112,7 @@ export async function reviseSeedFromFailure(args: {
     userBlocks.push({
       type: "text",
       text:
-        "Above is a screenshot of the page at the moment of failure. Use it to confirm the test actually reached the page it intended. " +
-        "If the screenshot shows a 404 / Not Found / Loading / generic error / wrong-page state, output CANNOT_EXTEND with reason \"page is not the intended one (likely a navigation problem, not a fixture coverage gap)\" — adding more seed data WILL NOT help. " +
-        "Only propose extension entities when the screenshot shows the correct page rendered with the affordance genuinely missing.",
+        "Above is a screenshot of the page at the moment of failure. Use it as visual ground truth when reasoning about what data shape the page expects to render — e.g. if it shows a list with 0 entries, propose entities that would populate it.",
     });
   }
   const resp = await client.messages.create({
