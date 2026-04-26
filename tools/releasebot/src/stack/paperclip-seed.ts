@@ -7,7 +7,7 @@ const MODEL = "claude-opus-4-7";
 const MAX_TEST_FILE_CHARS = 20_000;
 const MAX_TEST_FILES = 8;
 
-const AVAILABLE_ENDPOINTS = `
+export const AVAILABLE_ENDPOINTS = `
 Available write endpoints (local_trusted, no auth required). Use ONLY these — other paths return 404 or require approval flows.
 
   POST /api/companies
@@ -182,8 +182,12 @@ function extractJson(text: string): string {
   return text;
 }
 
-async function executeSpec(baseUrl: string, spec: FixtureSpec): Promise<FixtureSummary> {
-  const summary: FixtureSummary = {};
+export async function executeSpec(
+  baseUrl: string,
+  spec: FixtureSpec,
+  initialSummary?: FixtureSummary,
+): Promise<FixtureSummary> {
+  const summary: FixtureSummary = initialSummary ? { ...initialSummary } : {};
   for (const entity of spec.entities) {
     try {
       const endpoint = interpolate(entity.endpoint, summary);

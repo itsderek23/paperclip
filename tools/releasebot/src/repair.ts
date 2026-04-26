@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { repairStepFromDom } from "./plan.ts";
 import { extractSelectors } from "./plan-validate.ts";
-import type { Plan, SideResult, StepResult } from "./types.ts";
+import { applySeedExtension, readExistingExtension, reviseSeedFromFailure } from "./reseed.ts";
+import type { FixtureSpec, FixtureSummary, Plan, SideResult, StepResult } from "./types.ts";
 
 const log = (msg: string): void => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
@@ -65,21 +66,99 @@ export async function runRepairPass(args: {
     const literals = extractSelectors(originalTestBody);
     const haystack = domHtml.toLowerCase();
     const matches = literals.filter((lit) => lit.length >= 3 && haystack.includes(lit.toLowerCase()));
+    let shapeBExtensionApplied = false;
+    let shapeBRationale: string | undefined;
+    let shapeBAddedEntities: string[] | undefined;
     if (literals.length > 0 && matches.length === 0) {
-      log(`  repair step ${padded}: SHAPE B — none of ${literals.length} selectors appear in rendered DOM; marking inconclusive.`);
-      updatedAfter = patchStep(updatedAfter, i, {
-        ...afterStep,
-        status: "inconclusive",
-        error:
-          "Affordance text not visible in rendered DOM — likely fixture coverage gap (the seeded data does not exercise this UI path). Spec was not auto-repaired; see itsderek23/paperclip#4 for seed-revision follow-up.",
-        repair: {
-          outcome: "skipped_shape_b",
-          reason: "No selector literal from the failing test appeared in the rendered DOM.",
-          originalError: errorText,
-          originalTestBody,
-        },
+      log(`  repair step ${padded}: SHAPE B detected — none of ${literals.length} selectors appear in rendered DOM; attempting seed extension...`);
+      const extResult = await tryExtendSeed({
+        apiKey,
+        artifactsDir: args.artifactsDir,
+        afterBaseUrl: after.baseUrl,
+        failedStepDescription: stepMeta.description,
+        failedStepUrl: stepMeta.url,
+        failureSummary: errorText,
+        domHtml,
       });
-      continue;
+      if ("error" in extResult) {
+        log(`  repair step ${padded}: ${extResult.error}; marking inconclusive.`);
+        updatedAfter = patchStep(updatedAfter, i, {
+          ...afterStep,
+          status: "inconclusive",
+          error:
+            "Affordance text not visible in rendered DOM and seed extension did not recover. " + extResult.error,
+          repair: {
+            outcome: "seed_extension_failed",
+            reason: extResult.error,
+            originalError: errorText,
+            originalTestBody,
+          },
+        });
+        continue;
+      }
+
+      // Seed extension succeeded. Snapshot originals before the rerun overwrites them.
+      const originalSnapshot = await snapshotOriginalArtifacts(screenshotDir, padded);
+
+      // Try the original test verbatim against the now-extended fixtures.
+      const grepPattern = `step-${padded}`;
+      log(`  repair step ${padded}: seed extended (added ${extResult.addedEntities.join(", ") || "none"}); re-running original test with --grep "${grepPattern}"...`);
+      await runPlaywrightGrep({ configPath, cwd: generatedDir, grep: grepPattern, baseUrl: after.baseUrl, screenshotDir });
+      const verbatimRerun = await readPlaywrightStatusForStep(path.join(generatedDir, "results.json"), stepN);
+
+      if (verbatimRerun.status === "pass") {
+        log(`  repair step ${padded}: original test passed against extended seed.`);
+        updatedAfter = patchStep(updatedAfter, i, {
+          ...afterStep,
+          status: "pass",
+          error: undefined,
+          screenshot: path.join(screenshotDir, `step-${padded}.png`),
+          bboxes: await readBboxes(screenshotDir, padded),
+          repair: {
+            outcome: "seed_extended",
+            reason: "Original test passed after seed extension added the missing data shape.",
+            originalError: errorText,
+            originalTestBody,
+            seedExtensionRationale: extResult.rationale,
+            addedEntities: extResult.addedEntities,
+            ...(originalSnapshot ? { originalScreenshot: path.relative(args.artifactsDir, originalSnapshot) } : {}),
+          },
+        });
+        continue;
+      }
+
+      // Original test still fails — fall through to Shape A repair against the new DOM.
+      // The afterEach hook overwrote step-NN.html with the post-extension DOM, so we re-read it.
+      try {
+        domHtml = await fs.readFile(domPath, "utf8");
+      } catch {
+        log(`  repair step ${padded}: post-extension DOM not readable; keeping seed-extended status as fail.`);
+        updatedAfter = patchStep(updatedAfter, i, {
+          ...afterStep,
+          status: "fail",
+          error: verbatimRerun.error ?? errorText,
+          screenshot: path.join(screenshotDir, `step-${padded}.png`),
+          bboxes: await readBboxes(screenshotDir, padded),
+          repair: {
+            outcome: "seed_extension_failed",
+            reason: "Seed extension applied but post-extension DOM was unreadable.",
+            originalError: errorText,
+            originalTestBody,
+            seedExtensionRationale: extResult.rationale,
+            addedEntities: extResult.addedEntities,
+          },
+        });
+        continue;
+      }
+      shapeBExtensionApplied = true;
+      shapeBRationale = extResult.rationale;
+      shapeBAddedEntities = extResult.addedEntities;
+      // Stash the originalSnapshot path on the closure so the post-rewrite branch can attach it.
+      // We achieve this by writing it into `afterStep.repair?.originalScreenshot` via the main branch below.
+      // The flow continues — fall through to repairStepFromDom (which only sees `domHtml` and current state).
+      // We mark the pre-rewrite originalSnapshot via a side-channel by re-using the same screenshotDir conventions:
+      // the *.original.* files are already in place from snapshotOriginalArtifacts above.
+      void originalSnapshot;
     }
 
     log(`  repair step ${padded}: calling LLM to rewrite from rendered DOM (${literals.length} literals, ${matches.length} grounded)...`);
@@ -97,10 +176,12 @@ export async function runRepairPass(args: {
       updatedAfter = patchStep(updatedAfter, i, {
         ...afterStep,
         repair: {
-          outcome: "failed",
+          outcome: shapeBExtensionApplied ? "seed_extension_failed" : "failed",
           reason: `Repair LLM threw: ${(err as Error).message}`,
           originalError: errorText,
           originalTestBody,
+          ...(shapeBRationale ? { seedExtensionRationale: shapeBRationale } : {}),
+          ...(shapeBAddedEntities ? { addedEntities: shapeBAddedEntities } : {}),
         },
       });
       continue;
@@ -111,17 +192,32 @@ export async function runRepairPass(args: {
       updatedAfter = patchStep(updatedAfter, i, {
         ...afterStep,
         repair: {
-          outcome: "failed",
+          outcome: shapeBExtensionApplied ? "seed_extension_failed" : "failed",
           reason: repair.reason,
           originalError: errorText,
           originalTestBody,
+          ...(shapeBRationale ? { seedExtensionRationale: shapeBRationale } : {}),
+          ...(shapeBAddedEntities ? { addedEntities: shapeBAddedEntities } : {}),
         },
       });
       continue;
     }
 
-    // Snapshot original artifacts so the report can show what failed first.
-    const originalSnapshot = await snapshotOriginalArtifacts(screenshotDir, padded);
+    // Snapshot original artifacts so the report can show what failed first — UNLESS the Shape B
+    // path already snapshotted them above (in which case `step-NN.original.*` already holds the
+    // pre-anything failure state, and re-running snapshot here would overwrite that with the
+    // intermediate post-extension run).
+    let originalSnapshot: string | undefined;
+    if (shapeBExtensionApplied) {
+      originalSnapshot = path.join(screenshotDir, `step-${padded}.original.png`);
+      try {
+        await fs.access(originalSnapshot);
+      } catch {
+        originalSnapshot = undefined;
+      }
+    } else {
+      originalSnapshot = await snapshotOriginalArtifacts(screenshotDir, padded);
+    }
 
     // Patch the spec in place: swap this test's body for the revised one.
     const patched = replaceTestForStep(specSource, stepN, repair.revisedTestBody);
@@ -130,11 +226,13 @@ export async function runRepairPass(args: {
       updatedAfter = patchStep(updatedAfter, i, {
         ...afterStep,
         repair: {
-          outcome: "failed",
+          outcome: shapeBExtensionApplied ? "seed_extension_failed" : "failed",
           reason: "Splicing revised test back into the spec failed (regex did not match).",
           originalError: errorText,
           originalTestBody,
           revisedTestBody: repair.revisedTestBody,
+          ...(shapeBRationale ? { seedExtensionRationale: shapeBRationale } : {}),
+          ...(shapeBAddedEntities ? { addedEntities: shapeBAddedEntities } : {}),
         },
       });
       continue;
@@ -159,14 +257,22 @@ export async function runRepairPass(args: {
       screenshot: newScreenshot,
       bboxes: await readBboxes(screenshotDir, padded),
       repair: {
-        outcome: "applied",
-        reason: rerunStatus.status === "pass"
-          ? "Locator rewritten from rendered DOM; rerun passed."
-          : "Locator rewritten from rendered DOM; rerun did not pass.",
+        outcome: shapeBExtensionApplied
+          ? (rerunStatus.status === "pass" ? "seed_extended" : "seed_extension_failed")
+          : "applied",
+        reason: shapeBExtensionApplied
+          ? (rerunStatus.status === "pass"
+              ? "Seed extended and locator rewritten from rendered DOM; rerun passed."
+              : "Seed extended and locator rewritten from rendered DOM; rerun did not pass.")
+          : (rerunStatus.status === "pass"
+              ? "Locator rewritten from rendered DOM; rerun passed."
+              : "Locator rewritten from rendered DOM; rerun did not pass."),
         originalError: errorText,
         originalTestBody,
         revisedTestBody: repair.revisedTestBody,
         ...(originalSnapshot ? { originalScreenshot: path.relative(args.artifactsDir, originalSnapshot) } : {}),
+        ...(shapeBRationale ? { seedExtensionRationale: shapeBRationale } : {}),
+        ...(shapeBAddedEntities ? { addedEntities: shapeBAddedEntities } : {}),
       },
     });
   }
@@ -380,6 +486,97 @@ async function readPlaywrightStatusForStep(
   return {
     status: "fail",
     error: last?.error?.message?.split("\n").slice(0, 3).join(" ").slice(0, 400) ?? last?.status ?? "rerun failed",
+  };
+}
+
+interface ExtendSeedSuccess {
+  rationale: string;
+  addedEntities: string[];
+  mergedFixtures: FixtureSummary;
+}
+
+async function tryExtendSeed(opts: {
+  apiKey: string;
+  artifactsDir: string;
+  afterBaseUrl: string;
+  failedStepDescription: string;
+  failedStepUrl: string;
+  failureSummary: string;
+  domHtml: string;
+}): Promise<ExtendSeedSuccess | { error: string }> {
+  const { apiKey, artifactsDir, afterBaseUrl, failedStepDescription, failedStepUrl, failureSummary, domHtml } = opts;
+
+  // Idempotency guard: if a previous run already extended the seed for this PR/SHA, skip the
+  // LLM call and the apply (POSTs are not idempotent — re-running would create duplicates).
+  const existingExtension = await readExistingExtension(artifactsDir);
+  if (existingExtension && existingExtension.entities.length > 0) {
+    return {
+      error: `Seed extension already applied in a prior run (fixture-spec.extension.json exists with ${existingExtension.entities.length} entities). Use --no-reuse to start from a clean stack.`,
+    };
+  }
+
+  // Read the inputs we need to reason about: original spec, current after-side fixtures, and the diff.
+  let originalSpec: FixtureSpec;
+  try {
+    originalSpec = JSON.parse(await fs.readFile(path.join(artifactsDir, "fixture-spec.json"), "utf8")) as FixtureSpec;
+  } catch (err) {
+    return { error: `could not read fixture-spec.json: ${(err as Error).message}` };
+  }
+  let existingFixtures: FixtureSummary;
+  try {
+    existingFixtures = JSON.parse(await fs.readFile(path.join(artifactsDir, "fixtures.after.json"), "utf8")) as FixtureSummary;
+  } catch (err) {
+    return { error: `could not read fixtures.after.json: ${(err as Error).message}` };
+  }
+  let diff: string;
+  try {
+    diff = await fs.readFile(path.join(artifactsDir, "diff.patch"), "utf8");
+  } catch (err) {
+    return { error: `could not read diff.patch: ${(err as Error).message}` };
+  }
+
+  let revision: Awaited<ReturnType<typeof reviseSeedFromFailure>>;
+  try {
+    revision = await reviseSeedFromFailure({
+      apiKey,
+      originalSpec,
+      existingFixtures,
+      failedStepDescription,
+      failedStepUrl,
+      failureSummary,
+      domHtml,
+      diff,
+    });
+  } catch (err) {
+    return { error: `seed-revision LLM call threw: ${(err as Error).message}` };
+  }
+  if ("cannotExtend" in revision) {
+    return { error: `LLM declined seed extension: ${revision.reason}` };
+  }
+
+  // Apply the extension to the after stack.
+  let applied: Awaited<ReturnType<typeof applySeedExtension>>;
+  try {
+    applied = await applySeedExtension({
+      baseUrl: afterBaseUrl,
+      existingFixtures,
+      extensionEntities: revision.extensionEntities,
+      artifactsDir,
+      rationale: revision.rationale,
+    });
+  } catch (err) {
+    return { error: `applying seed extension failed: ${(err as Error).message}` };
+  }
+  if (applied.failedEntityNames.length === revision.extensionEntities.length) {
+    return { error: `all ${revision.extensionEntities.length} extension entities failed to POST.` };
+  }
+
+  return {
+    rationale: revision.rationale,
+    addedEntities: applied.appliedEntities
+      .filter((e) => !applied.failedEntityNames.includes(e.name))
+      .map((e) => e.name),
+    mergedFixtures: applied.mergedFixtures,
   };
 }
 

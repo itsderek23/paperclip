@@ -192,10 +192,15 @@ async function renderHtml(args: {
   code { background: #f1f1f3; padding: 0 .3rem; border-radius: 3px; font-size: .85em; }
   .repair-badge { font-size: .75rem; padding: .15rem .45rem; border-radius: 4px; font-weight: 600; }
   .repair-applied.repair-badge { background: #fff4d6; color: #7a5b00; }
+  .repair-seed_extended.repair-badge { background: #dff3df; color: #2a6d2a; }
   .repair-skipped_shape_b.repair-badge { background: #fde7e7; color: #962727; }
   .repair-failed.repair-badge { background: #fde7e7; color: #962727; }
+  .repair-seed_extension_failed.repair-badge { background: #fde7e7; color: #962727; }
   .repair-block { background: #fff8e6; border: 1px solid #f1d97f; border-radius: 6px; padding: .75rem 1rem; margin: .75rem 0; }
-  .repair-block.repair-skipped_shape_b, .repair-block.repair-failed { background: #fdecec; border-color: #f1bcbc; }
+  .repair-block.repair-seed_extended { background: #f0faf0; border-color: #b8d8b8; }
+  .repair-block.repair-skipped_shape_b, .repair-block.repair-failed, .repair-block.repair-seed_extension_failed { background: #fdecec; border-color: #f1bcbc; }
+  .repair-seed-rationale { margin: 0 0 .35rem; font-size: .9rem; color: #2a4d2a; }
+  .repair-added-entities { color: #5a7a5a; font-size: .85rem; }
   .repair-block .repair-reason { margin: 0 0 .35rem; }
   .repair-block .repair-orig-error { margin: 0 0 .5rem; font-size: .85rem; color: #555; }
   .repair-block details.repair-spec { margin: .35rem 0; }
@@ -240,9 +245,11 @@ function verdictLabel(v: string): string {
   return "✗ fail";
 }
 
-function repairBadgeLabel(outcome: "applied" | "skipped_shape_b" | "failed"): string {
+function repairBadgeLabel(outcome: "applied" | "skipped_shape_b" | "failed" | "seed_extended" | "seed_extension_failed"): string {
   if (outcome === "applied") return "🛠 repaired from DOM";
+  if (outcome === "seed_extended") return "🌱 seed extended";
   if (outcome === "skipped_shape_b") return "⚠ fixture gap";
+  if (outcome === "seed_extension_failed") return "⚠ seed extension failed";
   return "⚠ repair failed";
 }
 
@@ -255,10 +262,18 @@ function renderRepairBlock(
     : "";
   const original = repair.originalTestBody ? `<details class="repair-spec"><summary>Original test body (failed)</summary><pre><code>${escapeHtml(repair.originalTestBody)}</code></pre></details>` : "";
   const revised = repair.revisedTestBody ? `<details class="repair-spec" open><summary>Revised test body (run instead)</summary><pre><code>${escapeHtml(repair.revisedTestBody)}</code></pre></details>` : "";
+  const seedRationale = repair.seedExtensionRationale
+    ? `<p class="repair-seed-rationale"><strong>Seed extension:</strong> ${escapeHtml(repair.seedExtensionRationale)}${
+        repair.addedEntities && repair.addedEntities.length > 0
+          ? ` <span class="repair-added-entities">(added: ${repair.addedEntities.map(escapeHtml).join(", ")})</span>`
+          : ""
+      }</p>`
+    : "";
   void artifactsDir;
   return `
   <div class="repair-block repair-${repair.outcome}">
     <p class="repair-reason"><strong>Repair:</strong> ${escapeHtml(repair.reason)}</p>
+    ${seedRationale}
     <p class="repair-orig-error"><em>Original error:</em> <code>${escapeHtml(repair.originalError)}</code></p>
     ${originalScreenshot}
     ${original}

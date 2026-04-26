@@ -55,15 +55,27 @@ export interface StepRepairRecord {
   /** "applied" — repair LLM produced a revised test body and the rerun executed.
    *  "skipped_shape_b" — failure looked like a fixture-coverage gap (affordance
    *  text not in DOM), so we did NOT repair; step status downgraded to inconclusive.
-   *  "failed" — repair LLM threw or returned unparseable output. */
-  outcome: "applied" | "skipped_shape_b" | "failed";
+   *  "failed" — repair LLM threw or returned unparseable output.
+   *  "seed_extended" — Shape B detected; new fixture entities were synthesized
+   *  and applied, then the step (and optionally a follow-up DOM-grounded rewrite)
+   *  recovered the failure.
+   *  "seed_extension_failed" — Shape B detected; seed extension was attempted
+   *  but either the LLM declined (CANNOT_EXTEND), apply failed, or the post-extension
+   *  rerun still didn't pass. */
+  outcome: "applied" | "skipped_shape_b" | "failed" | "seed_extended" | "seed_extension_failed";
   reason: string;
   originalError: string;
   originalTestBody?: string;
   revisedTestBody?: string;
   /** Path (relative to artifacts dir) of the saved pre-repair screenshot, if we
-   * snapshotted one. Only present when outcome === "applied". */
+   * snapshotted one. Only present when outcome === "applied" or "seed_extended". */
   originalScreenshot?: string;
+  /** Names of fixture entities the LLM synthesized and successfully POSTed.
+   * Only present when seed extension was attempted. */
+  addedEntities?: string[];
+  /** One-line rationale from the seed-revision LLM explaining what data shape
+   * was added and why. Only present when seed extension was attempted. */
+  seedExtensionRationale?: string;
 }
 
 export interface SideResult {
