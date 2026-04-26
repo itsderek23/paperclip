@@ -196,4 +196,87 @@ export function stepScreenshotName(stepNumber: number): string {
   return `step-${String(stepNumber).padStart(2, "0")}.png`;
 }
 
+const REPAIR_SYSTEM_PROMPT = `You are repairing one Playwright test that failed because its locator did not match anything in the rendered page.
+
+Inputs you receive in the user message:
+  1. The step description (the QA goal for this test).
+  2. The original test body that failed.
+  3. The Playwright failure message.
+  4. The actual rendered HTML of the page at the moment the test failed (noise stripped).
+
+Your job: produce a revised version of the SAME test, with locators that target real DOM nodes visible in the rendered HTML.
+
+Rules:
+- Output ONLY the revised test body (a single \`test("step-NN · ...", async ({ page }) => { ... })\` block). No markdown fences, no commentary, no JSON wrapper.
+- Keep the exact step number and human-readable description in the test name (e.g. \`step-03 · ...\`).
+- markAnnotations([...]) MUST remain the FIRST statement of the body. Update its selectors to match the new locators.
+- Keep the same goto() URL the original used unless the rendered HTML clearly shows the wrong page was loaded.
+- Use Playwright role/text/label/testid locators that you can verify are present in the supplied HTML. Prefer getByRole / getByText / getByTestId / [data-testid="..."] over brittle CSS paths.
+- Keep the assertion intent the same. If the original was checking that something is visible, keep it as a visibility check on the equivalent real element.
+- If the rendered HTML does not contain ANY evidence of the affordance the original was asserting on, output the literal string \`CANNOT_REPAIR\` and nothing else. (Caller will keep the original failure rather than invent a passing test.)
+- No page.waitForTimeout, no page.evaluate unless genuinely needed.`;
+
+export async function repairStepFromDom(args: {
+  apiKey: string;
+  stepDescription: string;
+  originalTestBody: string;
+  failureSummary: string;
+  domHtml: string;
+}): Promise<{ revisedTestBody: string } | { cannotRepair: true; reason: string }> {
+  const { apiKey, stepDescription, originalTestBody, failureSummary, domHtml } = args;
+  const client = new Anthropic({ apiKey });
+  const trimmedHtml = stripNoiseFromHtml(domHtml).slice(0, 200_000);
+  const userContent = [
+    `Step description: ${stepDescription}`,
+    "",
+    "Original test body that failed:",
+    "```ts",
+    originalTestBody.trim(),
+    "```",
+    "",
+    "Failure message:",
+    failureSummary,
+    "",
+    "Actual rendered HTML at moment of failure (script/style/svg stripped):",
+    "```html",
+    trimmedHtml,
+    "```",
+  ].join("\n");
+  const resp = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2000,
+    system: REPAIR_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userContent }],
+  });
+  const text = resp.content
+    .flatMap((b) => (b.type === "text" ? [b.text] : []))
+    .join("\n")
+    .trim();
+  if (text === "CANNOT_REPAIR" || /^CANNOT_REPAIR\b/.test(text)) {
+    return { cannotRepair: true, reason: "Repair LLM declined: rendered DOM has no evidence of the affordance." };
+  }
+  const body = extractTestBlock(text);
+  if (!body) {
+    return { cannotRepair: true, reason: "Repair LLM response could not be parsed as a single test() block." };
+  }
+  return { revisedTestBody: body };
+}
+
+function extractTestBlock(text: string): string | null {
+  // Strip code fences if present.
+  const fenceMatch = text.match(/```(?:ts|tsx|typescript|javascript|js)?\s*([\s\S]*?)```/);
+  const candidate = (fenceMatch ? fenceMatch[1] : text).trim();
+  if (!/^test\(\s*["'`]/.test(candidate)) return null;
+  return candidate;
+}
+
+function stripNoiseFromHtml(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, "<svg/>")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\s{3,}/g, "  ");
+}
+
 export type { PlanStepMetadata };

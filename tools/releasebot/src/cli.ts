@@ -11,6 +11,7 @@ import type { StackAdapter } from "./stack/adapter.ts";
 import { generatePlan } from "./plan.ts";
 import { extractSelectors, findUngroundedSelectors } from "./plan-validate.ts";
 import { runPlanAgainst } from "./run.ts";
+import { runRepairPass } from "./repair.ts";
 import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
 import { gatherDiffContext } from "./diff-context.ts";
@@ -360,7 +361,13 @@ async function main(): Promise<void> {
     log("running plan (before)...");
     const beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
     log("running plan (after)...");
-    const afterResult = await runPlanAgainst(plan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
+    let afterResult = await runPlanAgainst(plan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
+
+    const needsRepair = afterResult.steps.some((s) => s.status === "fail");
+    if (needsRepair) {
+      log("repair pass: rewriting failing after-side steps from rendered DOM...");
+      afterResult = await runRepairPass({ plan, before: beforeResult, after: afterResult, artifactsDir, apiKey });
+    }
 
     log("visual review...");
     const review = await reviewRun(pr, plan, beforeResult, afterResult, { apiKey });

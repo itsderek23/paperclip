@@ -88,6 +88,7 @@ function renderMarkdown(args: {
 function verdictBadge(v: string): string {
   if (v === "pass") return "✓ pass";
   if (v === "intentional_change") return "◆ intentional";
+  if (v === "inconclusive") return "? inconclusive";
   return "✗ fail";
 }
 
@@ -137,15 +138,17 @@ async function renderHtml(args: {
   <details class="full-toggle"><summary>Show full screenshot</summary>${fullPair}</details>`
       : fullPair;
 
+    const repairBlock = a?.repair ? renderRepairBlock(a.repair, artifactsDir) : "";
     rows.push(`
 <section class="step verdict-${verdict}">
   <header>
     <span class="n">${i + 1}</span>
     <h3>${escapeHtml(step.description)}</h3>
-    <span class="verdict">${escapeHtml(verdictLabel(verdict))}</span>
+    <span class="verdict">${escapeHtml(verdictLabel(verdict))}</span>${a?.repair ? ` <span class="repair-badge repair-${a.repair.outcome}">${escapeHtml(repairBadgeLabel(a.repair.outcome))}</span>` : ""}
   </header>
   <p class="meta"><code>${escapeHtml(step.url)}</code></p>
   ${obs ? `<p class="obs">${escapeHtml(obs)}</p>` : ""}
+  ${repairBlock}
   ${focusBlock}
 </section>`);
   }
@@ -168,6 +171,7 @@ async function renderHtml(args: {
   .verdict-pass .verdict { background: #dff3df; color: #2a6d2a; }
   .verdict-intentional_change .verdict { background: #e3ecfa; color: #1f4a94; }
   .verdict-fail .verdict { background: #fadede; color: #962727; }
+  .verdict-inconclusive .verdict { background: #f1f1f3; color: #555; }
   .meta { color: #666; font-size: .85rem; margin: .25rem 0 .5rem; }
   .obs { margin: .5rem 0 .75rem; }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
@@ -186,6 +190,18 @@ async function renderHtml(args: {
   figure a:hover img { opacity: .92; }
   .missing { padding: 3rem; text-align: center; color: #999; }
   code { background: #f1f1f3; padding: 0 .3rem; border-radius: 3px; font-size: .85em; }
+  .repair-badge { font-size: .75rem; padding: .15rem .45rem; border-radius: 4px; font-weight: 600; }
+  .repair-applied.repair-badge { background: #fff4d6; color: #7a5b00; }
+  .repair-skipped_shape_b.repair-badge { background: #fde7e7; color: #962727; }
+  .repair-failed.repair-badge { background: #fde7e7; color: #962727; }
+  .repair-block { background: #fff8e6; border: 1px solid #f1d97f; border-radius: 6px; padding: .75rem 1rem; margin: .75rem 0; }
+  .repair-block.repair-skipped_shape_b, .repair-block.repair-failed { background: #fdecec; border-color: #f1bcbc; }
+  .repair-block .repair-reason { margin: 0 0 .35rem; }
+  .repair-block .repair-orig-error { margin: 0 0 .5rem; font-size: .85rem; color: #555; }
+  .repair-block details.repair-spec { margin: .35rem 0; }
+  .repair-block details.repair-spec > summary { cursor: pointer; font-size: .85rem; color: #444; }
+  .repair-block pre { margin: .5rem 0 0; padding: .6rem .75rem; background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; overflow-x: auto; font-size: .8rem; }
+  .repair-block .repair-original-shot { max-width: 360px; margin: .5rem 0; }
   @media (prefers-color-scheme: dark) {
     body { background: #111; color: #e4e4e7; }
     .summary { background: #1d1d20; }
@@ -220,7 +236,34 @@ ${rows.join("\n")}
 function verdictLabel(v: string): string {
   if (v === "pass") return "✓ pass";
   if (v === "intentional_change") return "◆ intentional change";
+  if (v === "inconclusive") return "? inconclusive";
   return "✗ fail";
+}
+
+function repairBadgeLabel(outcome: "applied" | "skipped_shape_b" | "failed"): string {
+  if (outcome === "applied") return "🛠 repaired from DOM";
+  if (outcome === "skipped_shape_b") return "⚠ fixture gap";
+  return "⚠ repair failed";
+}
+
+function renderRepairBlock(
+  repair: NonNullable<import("./types.ts").StepResult["repair"]>,
+  artifactsDir: string,
+): string {
+  const originalScreenshot = repair.originalScreenshot
+    ? `<figure class="repair-original-shot"><figcaption>original failure screenshot</figcaption><a href="${escapeAttr(repair.originalScreenshot)}" target="_blank" rel="noopener"><img src="${escapeAttr(repair.originalScreenshot)}" /></a></figure>`
+    : "";
+  const original = repair.originalTestBody ? `<details class="repair-spec"><summary>Original test body (failed)</summary><pre><code>${escapeHtml(repair.originalTestBody)}</code></pre></details>` : "";
+  const revised = repair.revisedTestBody ? `<details class="repair-spec" open><summary>Revised test body (run instead)</summary><pre><code>${escapeHtml(repair.revisedTestBody)}</code></pre></details>` : "";
+  void artifactsDir;
+  return `
+  <div class="repair-block repair-${repair.outcome}">
+    <p class="repair-reason"><strong>Repair:</strong> ${escapeHtml(repair.reason)}</p>
+    <p class="repair-orig-error"><em>Original error:</em> <code>${escapeHtml(repair.originalError)}</code></p>
+    ${originalScreenshot}
+    ${original}
+    ${revised}
+  </div>`;
 }
 
 function unionRect(boxes: BBox[]): BBox {

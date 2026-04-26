@@ -11,6 +11,14 @@ export function extractSelectors(spec: string): string[] {
     /\[data-testid=["']([^"']+)["']\]/g,
     /\[aria-label=["']([^"']+)["']\]/g,
     /:has-text\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
+    // Attribute substring/exact selectors that ground on real values, e.g.
+    //   page.locator('a[href$="/issues/SUB-1"]') → "/issues/SUB-1"
+    //   page.locator('a[href*="TRE-3"]')         → "TRE-3"
+    //   page.locator('[role="dialog"]')          → "dialog"
+    /\[(?:href|title|alt|name|value|placeholder|aria-[a-z]+|role|class)[*^$~|]?=["']([^"']+)["']\]/gi,
+    // toContainText / toHaveText literal arguments — content the assertion expects.
+    /\.toContainText\(\s*["'`]([^"'`]+)["'`]/g,
+    /\.toHaveText\(\s*["'`]([^"'`]+)["'`]/g,
   ];
 
   for (const re of stringPatterns) {

@@ -37,7 +37,7 @@ export interface BBox {
 
 export interface StepResult {
   step_n: number;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "inconclusive";
   error?: string;
   screenshot: string;
   /** Union rect per selector index, in page (CSS) pixel coordinates. Captured
@@ -45,6 +45,25 @@ export interface StepResult {
    * Absent when the test had no markAnnotations() call or when no selector
    * resolved. Used by the report to crop focus-mode images. */
   bboxes?: BBox[];
+  /** Set when the after-side spec was rewritten from rendered DOM and re-run.
+   * Carries enough context for the report to show what failed first and what
+   * we ran instead. */
+  repair?: StepRepairRecord;
+}
+
+export interface StepRepairRecord {
+  /** "applied" — repair LLM produced a revised test body and the rerun executed.
+   *  "skipped_shape_b" — failure looked like a fixture-coverage gap (affordance
+   *  text not in DOM), so we did NOT repair; step status downgraded to inconclusive.
+   *  "failed" — repair LLM threw or returned unparseable output. */
+  outcome: "applied" | "skipped_shape_b" | "failed";
+  reason: string;
+  originalError: string;
+  originalTestBody?: string;
+  revisedTestBody?: string;
+  /** Path (relative to artifacts dir) of the saved pre-repair screenshot, if we
+   * snapshotted one. Only present when outcome === "applied". */
+  originalScreenshot?: string;
 }
 
 export interface SideResult {
