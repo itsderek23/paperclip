@@ -78,7 +78,6 @@ export async function buildCommentMarkdown(args: {
     }
     lines.push("");
     for (const i of group.stepIndices) {
-      const step = plan.metadata.steps[i];
       const beforeCell = await buildImageCell({
         side: "before",
         stepIndex: i,
@@ -91,8 +90,6 @@ export async function buildCommentMarkdown(args: {
         sideResult: after,
         artifactsDir,
       });
-      lines.push(`**${step.description}**`);
-      lines.push("");
       lines.push(`| before · \`${baseShort}\` | after · \`${headShort}\` |`);
       lines.push(`|---|---|`);
       lines.push(`| ${beforeCell} | ${afterCell} |`);
