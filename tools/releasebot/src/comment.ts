@@ -84,6 +84,20 @@ export async function buildCommentMarkdown(args: {
     }
     lines.push("");
     for (const i of group.stepIndices) {
+      const verdict = review.steps.find((s) => s.step_n === i + 1)?.verdict;
+      if (verdict === "pass") {
+        const cell = await buildImageCell({
+          side: "after",
+          stepIndex: i,
+          sideResult: after,
+          artifactsDir,
+        });
+        lines.push(`*No visible differences before/after.*`);
+        lines.push("");
+        lines.push(cell);
+        lines.push("");
+        continue;
+      }
       const beforeCell = await buildImageCell({
         side: "before",
         stepIndex: i,
