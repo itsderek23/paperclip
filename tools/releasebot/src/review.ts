@@ -75,6 +75,17 @@ export async function reviewRun(
       });
       continue;
     }
+    if (afterStatus === "inconclusive") {
+      const repairReason = after.steps[idx]?.repair?.reason?.trim();
+      const errorText = after.steps[idx]?.error?.trim();
+      const detail = repairReason || errorText || "the test could not reach the planned surface";
+      stepReviews.push({
+        step_n: stepN,
+        verdict: "inconclusive",
+        observation: `Couldn't reach the planned surface — ${detail}`,
+      });
+      continue;
+    }
     try {
       const [beforeB64, afterB64] = await Promise.all([readPngBase64(beforePng), readPngBase64(afterPng)]);
       const testSource = perStepSource.get(stepN) ?? "(test source not isolatable — see spec file)";

@@ -33,6 +33,23 @@ export async function buildCommentMarkdown(args: {
   lines.push(`### Cutter Summary`);
   lines.push("");
 
+  const inconclusiveIndices = plan.metadata.steps
+    .map((_, i) => i)
+    .filter((i) => review.steps.find((s) => s.step_n === i + 1)?.verdict === "inconclusive");
+  if (inconclusiveIndices.length > 0) {
+    for (const i of inconclusiveIndices) {
+      const reason =
+        after.steps[i]?.repair?.reason?.trim() ||
+        after.steps[i]?.error?.trim() ||
+        "the test could not reach the planned surface";
+      lines.push(`> ⚠ **Couldn't verify this change** — ${reason}`);
+      lines.push("");
+    }
+    lines.push(`[Full report ↗](report.html)`);
+    lines.push("");
+    return lines.join("\n");
+  }
+
   const coverageNote = plan.metadata.coverageNote?.trim();
   if (coverageNote) {
     lines.push(`> ⚠ **Coverage limit** — ${coverageNote}`);
