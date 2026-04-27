@@ -33,6 +33,12 @@ export async function buildCommentMarkdown(args: {
   lines.push(`### cutter · PR #${pr.number}`);
   lines.push("");
 
+  const narrative = extractNarrativeSummary(review.summary);
+  if (narrative) {
+    lines.push(narrative);
+    lines.push("");
+  }
+
   if (plan.metadata.steps.length === 0) {
     lines.push("cutter skipped this PR — see [full report](report.html) for why.");
     lines.push("");
@@ -120,6 +126,12 @@ async function buildImageCell(args: {
   const thumbRel = cropExists ? path.relative(artifactsDir, cropAbs) : fullRel;
 
   return `<a href="${fullRel}" target="_blank" rel="noopener"><img src="${thumbRel}" alt="${side}"></a>`;
+}
+
+function extractNarrativeSummary(summary: string): string {
+  const m = summary.match(/passed before, \d+\/\d+ passed after\.\s*/);
+  const tail = m ? summary.slice(m.index! + m[0].length) : summary;
+  return tail.trim();
 }
 
 async function fileExists(p: string): Promise<boolean> {
