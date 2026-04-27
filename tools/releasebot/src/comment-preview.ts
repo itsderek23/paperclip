@@ -29,7 +29,7 @@ export function buildCommentPreviewHtml(args: {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>releasebot comment preview · PR #${pr.number}</title>
+<title>cutter comment preview · PR #${pr.number}</title>
 <style>
   :root { color-scheme: light; }
   body {
@@ -143,7 +143,7 @@ export function buildCommentPreviewHtml(args: {
 <div class="page">
 
 <p class="preview-note">
-  QA mockup of how this releasebot comment would render on the PR. Not posted to GitHub.
+  QA mockup of how this cutter comment would render on the PR. Not posted to GitHub.
   Images load from this directory's <code>before/</code> and <code>after/</code> screenshots.
 </p>
 
@@ -165,10 +165,10 @@ ${prBodyHtml}
 </div>
 
 <div class="timeline-item">
-  <div class="avatar avatar-bot">RBOT</div>
+  <div class="avatar avatar-bot">CUT</div>
   <div class="comment">
     <div class="comment-header">
-      <strong>releasebot</strong> <span class="badge">bot</span> commented just now
+      <strong>cutter</strong> <span class="badge">bot</span> commented just now
     </div>
     <div class="comment-body">
 ${commentHtml}
