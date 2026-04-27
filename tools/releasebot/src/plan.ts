@@ -52,6 +52,7 @@ markAnnotations() MUST be the FIRST statement in every test body. Calling it up-
 Rules:
 
 - Number steps starting at 01. The step number in the test name MUST match step-NN in the screenshot filename and its index (NN-1) in metadata.steps.
+- The metadata.steps[].description field is shown to human reviewers in a PR comment. Keep it generic — describe the *kind* of thing being tested, not the specific seeded record. Refer to entities generically ("an issue", "the descendant issue", "a subtask", "the assigned user", "the project"). Do NOT include seeded fixture ids/keys (e.g. "PAP-1", "PAP-6", "REF-2", project codes, user emails) in the description — those are fine in selectors, URLs, and the test name, but not in this user-facing field.
 - Use Playwright locators + expect, NOT text-substring includes. Prefer \`page.getByRole("button", { name: "..." })\`, \`page.getByLabel("...")\`, \`page.getByTestId("...")\`, \`page.getByText("...")\`.
 - Use ONLY relative URLs on page.goto — baseURL is injected from env.
 - For text the PR introduced that is HIDDEN behind an interaction (menu button, tab, drawer, popover, dialog trigger that must be opened to reveal the new content) — click the trigger FIRST, then assert on the new text. If the new content is already visible on initial page load (a new settings section, a new card on a list page, a new banner, new copy in an existing visible region), do NOT add interaction steps; just navigate and assert.

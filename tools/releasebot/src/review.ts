@@ -18,6 +18,8 @@ Use "pass" when before and after look identical / unchanged for this surface.
 Use "intentional_change" when the after clearly reflects the PR's intent and looks correct.
 Use "fail" when the after shows a clipped, broken, misaligned, missing, or wrong-state render that a human reviewer would block the PR for.
 
+In the "observation" field, refer to entities generically — "an issue", "the descendant issue", "the assigned user", "the project" — never by their seeded fixture id or key (no "PAP-3", "REF-2", project codes, etc.). The reader does not know what those names mean.
+
 Consider the Playwright test source when judging — if the test clicked a menu trigger, both screenshots should reflect the open-menu state; a closed menu after the click would be a test-harness problem, not a PR regression.
 
 Return ONLY the JSON. No markdown fences.`;
@@ -32,6 +34,7 @@ Rules:
 - Describe only. Do not editorialize. Do not characterize, interpret, or judge the change.
 - Forbidden words/phrases (illustrative, not exhaustive): "reads as", "feels", "looks like a", "deliberate", "intentional", "thoughtful", "cohesive", "coherent", "polish", "polished", "drift", "inadvertent", "ergonomic", "improvement", "improved", "cleaner", "tighter", "consistent", "consistency", "appears to", "seems to", "evidently", "suggests", "implies", "rather than", "as opposed to". If you find yourself wanting one of these, delete the clause.
 - No good/bad/better/worse/correct/incorrect judgments.
+- No specific record names, IDs, or seeded test-fixture identifiers that would only mean something to someone with the test data loaded. Do not name issues by their key (e.g. "PAP-3", "REF-2"), do not name projects, users, or other entities by their id or short name. Refer to entities generically: "an issue", "the descendant issue", "a subtask", "the assigned user", "the project". The reviewer doesn't know what "PAP-3" is and shouldn't have to.
 - The caller prepends a deterministic counts line — do not restate totals (no "3/3", "all three", "both sides", "after-side failures").
 - No code identifiers (method/class names, file paths, selectors, attribute names).
 - No bullets, no step enumeration.
