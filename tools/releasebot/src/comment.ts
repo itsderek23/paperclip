@@ -30,7 +30,7 @@ export async function buildCommentMarkdown(args: {
   const { pr, plan, before, after, review, artifactsDir } = args;
   const lines: string[] = [];
   lines.push(MARKER);
-  lines.push(`### cutter · PR #${pr.number}`);
+  lines.push(`### Cutter Summary`);
   lines.push("");
 
   const narrative = extractNarrativeSummary(review.summary);
