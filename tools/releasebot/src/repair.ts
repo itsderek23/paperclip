@@ -15,15 +15,23 @@ export async function runRepairPass(args: {
   after: SideResult;
   artifactsDir: string;
   apiKey: string;
-}): Promise<SideResult> {
-  const { plan, before, after, artifactsDir, apiKey } = args;
+  beforeBaseUrl: string;
+}): Promise<{ after: SideResult; before: SideResult }> {
+  const { plan, before, after, artifactsDir, apiKey, beforeBaseUrl } = args;
   const generatedDir = path.join(artifactsDir, "generated", "after");
   const screenshotDir = path.join(artifactsDir, "after");
   const specPath = path.join(generatedDir, "generated.spec.ts");
   const configPath = path.join(generatedDir, "playwright.config.ts");
 
+  const beforeGeneratedDir = path.join(artifactsDir, "generated", "before");
+  const beforeScreenshotDir = path.join(artifactsDir, "before");
+  const beforeSpecPath = path.join(beforeGeneratedDir, "generated.spec.ts");
+  const beforeConfigPath = path.join(beforeGeneratedDir, "playwright.config.ts");
+
   let updatedAfter: SideResult = after;
+  let updatedBefore: SideResult = before;
   let specSource: string | null = null;
+  let beforeSpecSource: string | null = null;
 
   // Load shared context once. The triage call needs fixtures + diff for every step.
   let fixtures: FixtureSummary = {};
@@ -48,14 +56,13 @@ export async function runRepairPass(args: {
     const stepN = afterStep.step_n;
     const padded = String(stepN).padStart(2, "0");
     const errorText = afterStep.error ?? "";
-    void before; // before result is informational; triage doesn't need it.
 
     if (specSource === null) {
       try {
         specSource = await fs.readFile(specPath, "utf8");
       } catch {
         log(`  repair: could not read spec at ${specPath}; aborting repair pass.`);
-        return updatedAfter;
+        return { after: updatedAfter, before: updatedBefore };
       }
     }
 
@@ -171,6 +178,19 @@ export async function runRepairPass(args: {
             ...(originalSnapshot ? { originalScreenshot: path.relative(artifactsDir, originalSnapshot) } : {}),
           },
         });
+        ({ updatedBefore, beforeSpecSource } = await mirrorPatchToBefore({
+          stepN,
+          padded,
+          patchedAfterSpec: patched,
+          beforeSpecPath,
+          beforeConfigPath,
+          beforeGeneratedDir,
+          beforeScreenshotDir,
+          beforeBaseUrl,
+          beforeSpecSource,
+          updatedBefore,
+          stepIndex: i,
+        }));
         continue;
       }
 
@@ -194,6 +214,21 @@ export async function runRepairPass(args: {
         });
         if (result.specSource) specSource = result.specSource;
         updatedAfter = patchStep(updatedAfter, i, { ...afterStep, ...result.stepPatch });
+        if (result.specSource) {
+          ({ updatedBefore, beforeSpecSource } = await mirrorPatchToBefore({
+            stepN,
+            padded,
+            patchedAfterSpec: result.specSource,
+            beforeSpecPath,
+            beforeConfigPath,
+            beforeGeneratedDir,
+            beforeScreenshotDir,
+            beforeBaseUrl,
+            beforeSpecSource,
+            updatedBefore,
+            stepIndex: i,
+          }));
+        }
         continue;
       }
 
@@ -218,13 +253,103 @@ export async function runRepairPass(args: {
         });
         if (result.specSource) specSource = result.specSource;
         updatedAfter = patchStep(updatedAfter, i, { ...afterStep, ...result.stepPatch });
+        if (result.specSource) {
+          ({ updatedBefore, beforeSpecSource } = await mirrorPatchToBefore({
+            stepN,
+            padded,
+            patchedAfterSpec: result.specSource,
+            beforeSpecPath,
+            beforeConfigPath,
+            beforeGeneratedDir,
+            beforeScreenshotDir,
+            beforeBaseUrl,
+            beforeSpecSource,
+            updatedBefore,
+            stepIndex: i,
+          }));
+        }
         continue;
       }
     }
   }
 
   await fs.writeFile(path.join(screenshotDir, "steps.json"), JSON.stringify(updatedAfter, null, 2));
-  return updatedAfter;
+  await fs.writeFile(path.join(beforeScreenshotDir, "steps.json"), JSON.stringify(updatedBefore, null, 2));
+  return { after: updatedAfter, before: updatedBefore };
+}
+
+async function mirrorPatchToBefore(opts: {
+  stepN: number;
+  padded: string;
+  patchedAfterSpec: string;
+  beforeSpecPath: string;
+  beforeConfigPath: string;
+  beforeGeneratedDir: string;
+  beforeScreenshotDir: string;
+  beforeBaseUrl: string;
+  beforeSpecSource: string | null;
+  updatedBefore: SideResult;
+  stepIndex: number;
+}): Promise<{ updatedBefore: SideResult; beforeSpecSource: string }> {
+  const {
+    stepN, padded, patchedAfterSpec, beforeSpecPath, beforeConfigPath,
+    beforeGeneratedDir, beforeScreenshotDir, beforeBaseUrl, updatedBefore, stepIndex,
+  } = opts;
+  let { beforeSpecSource } = opts;
+
+  const revisedTestBody = extractTestForStep(patchedAfterSpec, stepN);
+  if (!revisedTestBody) {
+    log(`  repair step ${padded}: could not extract revised test from after spec; skipping before-side mirror.`);
+    return { updatedBefore, beforeSpecSource: beforeSpecSource ?? "" };
+  }
+
+  if (beforeSpecSource === null) {
+    try {
+      beforeSpecSource = await fs.readFile(beforeSpecPath, "utf8");
+    } catch {
+      log(`  repair step ${padded}: before spec at ${beforeSpecPath} unreadable; skipping before-side mirror.`);
+      return { updatedBefore, beforeSpecSource: "" };
+    }
+  }
+
+  const patchedBefore = replaceTestForStep(beforeSpecSource, stepN, revisedTestBody);
+  if (!patchedBefore) {
+    log(`  repair step ${padded}: before-side spec splice failed; skipping mirror.`);
+    return { updatedBefore, beforeSpecSource };
+  }
+  await fs.writeFile(beforeSpecPath, patchedBefore, "utf8");
+  await snapshotOriginalArtifacts(beforeScreenshotDir, padded);
+
+  log(`  repair step ${padded}: mirroring patched test to before-side and re-running against ${beforeBaseUrl}...`);
+  await runPlaywrightGrep({
+    configPath: beforeConfigPath,
+    cwd: beforeGeneratedDir,
+    grep: `step-${padded}`,
+    baseUrl: beforeBaseUrl,
+    screenshotDir: beforeScreenshotDir,
+  });
+  const rerunStatus = await readPlaywrightStatusForStep(
+    path.join(beforeGeneratedDir, "results.json"),
+    stepN,
+  );
+
+  const beforeStep = updatedBefore.steps[stepIndex];
+  const newScreenshot = path.join(beforeScreenshotDir, `step-${padded}.png`);
+  const newRawScreenshot = newScreenshot.replace(/\.png$/, ".raw.png");
+  const newBboxes = await readBboxes(beforeScreenshotDir, padded);
+  const patched: StepResult = {
+    ...beforeStep,
+    step_n: stepN,
+    status: rerunStatus.status,
+    error: rerunStatus.error,
+    screenshot: newScreenshot,
+    rawScreenshot: newRawScreenshot,
+    ...(newBboxes ? { bboxes: newBboxes } : {}),
+  };
+  return {
+    updatedBefore: patchStep(updatedBefore, stepIndex, patched),
+    beforeSpecSource: patchedBefore,
+  };
 }
 
 interface RewriteOutcome {

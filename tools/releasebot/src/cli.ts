@@ -369,14 +369,23 @@ async function main(): Promise<void> {
     printPlan(plan);
 
     log("running plan (before)...");
-    const beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
+    let beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
     log("running plan (after)...");
     let afterResult = await runPlanAgainst(plan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
 
     const needsRepair = afterResult.steps.some((s) => s.status === "fail");
     if (needsRepair) {
       log("repair pass: rewriting failing after-side steps from rendered DOM...");
-      afterResult = await runRepairPass({ plan, before: beforeResult, after: afterResult, artifactsDir, apiKey });
+      const repaired = await runRepairPass({
+        plan,
+        before: beforeResult,
+        after: afterResult,
+        artifactsDir,
+        apiKey,
+        beforeBaseUrl: beforeStack.baseUrl,
+      });
+      afterResult = repaired.after;
+      beforeResult = repaired.before;
     }
 
     log("visual review...");
