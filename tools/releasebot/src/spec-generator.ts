@@ -29,9 +29,8 @@ function renderSpec(body: string, annotateImport: string): string {
   // screenshot for EVERY step. With workers:1 in the config, tests still run
   // one at a time in file order; we just don't want failure to cascade.
   //
-  // The afterEach hook both draws annotations (from markAnnotations() calls
-  // made at the top of the test body) AND takes the screenshot, so both
-  // happen even when a test threw mid-body. The test body calls
+  // The afterEach hook resolves the selector bboxes and takes the
+  // screenshot, both even when the test threw mid-body. The test body calls
   // markAnnotations([...]) up front; it does NOT call annotate() or
   // page.screenshot() itself.
   return `import { test, expect } from "@playwright/test";
@@ -45,30 +44,16 @@ test.afterEach(async ({ page }, testInfo) => {
   if (!m) return;
   const padded = m[1];
   const screenshotFile = \`\${SCREENSHOT_DIR}/step-\${padded}.png\`;
-  const rawScreenshotFile = \`\${SCREENSHOT_DIR}/step-\${padded}.raw.png\`;
   const bboxesFile = \`\${SCREENSHOT_DIR}/step-\${padded}.bboxes.json\`;
   const domFile = \`\${SCREENSHOT_DIR}/step-\${padded}.html\`;
   try {
-    // Capture the raw, unannotated screenshot first so report-time code can
-    // re-render outlines / re-crop offline without booting Playwright again.
-    await page.screenshot({ path: rawScreenshotFile });
-
     const selectors = readMarkedAnnotations(testInfo);
     let boxes: Array<{ selectorIndex: number; box: { x: number; y: number; width: number; height: number } }> = [];
     if (selectors.length > 0) boxes = await annotate(page, selectors);
 
-    // Capture DOM snapshot before screenshot so the snapshot doesn't include
-    // the debug overlay; if it throws (e.g., page navigated away mid-test),
-    // continue — the screenshot is still source of truth.
     try {
-      const html = await page.evaluate(() => {
-        const overlay = document.getElementById("__releasebot_overlay__");
-        if (overlay) overlay.remove();
-        return document.documentElement.outerHTML;
-      });
+      const html = await page.evaluate(() => document.documentElement.outerHTML);
       await writeFile(domFile, "<!doctype html>\\n" + html, "utf8");
-      // Re-draw the overlay if we have boxes; cheap and keeps the screenshot annotated.
-      if (boxes.length > 0) await annotate(page, selectors);
     } catch {
       // best-effort
     }

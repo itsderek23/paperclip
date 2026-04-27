@@ -335,7 +335,6 @@ async function mirrorPatchToBefore(opts: {
 
   const beforeStep = updatedBefore.steps[stepIndex];
   const newScreenshot = path.join(beforeScreenshotDir, `step-${padded}.png`);
-  const newRawScreenshot = newScreenshot.replace(/\.png$/, ".raw.png");
   const newBboxes = await readBboxes(beforeScreenshotDir, padded);
   const patched: StepResult = {
     ...beforeStep,
@@ -343,7 +342,6 @@ async function mirrorPatchToBefore(opts: {
     status: rerunStatus.status,
     error: rerunStatus.error,
     screenshot: newScreenshot,
-    rawScreenshot: newRawScreenshot,
     ...(newBboxes ? { bboxes: newBboxes } : {}),
   };
   return {

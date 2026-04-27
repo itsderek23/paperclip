@@ -5,14 +5,15 @@ const MAX_MATCHES_PER_SELECTOR = 20;
 const ANNOTATION_TYPE = "releasebot-annotate";
 
 /**
- * Register the selectors to outline on this test's screenshot. Call at the TOP
- * of a test body (right after the test declaration), BEFORE any expect() —
- * so even if an assertion later throws, the harness's afterEach can still
- * draw outlines before taking the screenshot.
+ * Register the selectors whose bounding boxes the harness should record on
+ * this test's screenshot. Call at the TOP of a test body (right after the
+ * test declaration), BEFORE any expect() — so even if an assertion later
+ * throws, the afterEach can still resolve and persist the bboxes.
  *
  * The selectors are stashed in the test's annotations array; the generated
- * spec's afterEach hook reads them and calls annotate(page, selectors) just
- * before page.screenshot().
+ * spec's afterEach hook reads them and calls annotate(page, selectors)
+ * before page.screenshot() to capture bboxes (used for focus-mode crops in
+ * the QA report).
  */
 export function markAnnotations(selectors: string[]): void {
   test.info().annotations.push({
@@ -43,21 +44,16 @@ export interface AnnotationBox {
 }
 
 /**
- * Draws red outline overlays around every match of each selector and labels
- * them with the 1-based index of the selector they came from. Call immediately
- * before `page.screenshot(...)`.
+ * Resolves each selector's bounding boxes for downstream focus-mode crops
+ * in the QA report. Does not paint anything on the page — the screenshot
+ * the afterEach takes after this call is fully clean.
  *
- * Multiple elements matching the same selector all get outlined with the SAME
- * number — the label identifies which selector the box came from, not which
- * instance. A selector that matches e.g. both an inline ref and a sidebar pill
- * (common when the PR is about unifying rendering across surfaces) will draw
- * both boxes with label "1", which is exactly the signal the reviewer wants.
+ * Multiple matches of the same selector all share the same selectorIndex
+ * — that index identifies which selector the box came from, not which
+ * instance — so the report can union them into a single crop region.
  *
- * Missing selectors are silently skipped (no throw) — this is a visual aid,
- * not an assertion.
- *
- * Returns the resolved bounding boxes so the caller can persist them as
- * structured data (used for focus-mode crops in the report).
+ * Missing selectors are silently skipped (no throw); this is data
+ * collection, not an assertion.
  */
 export async function annotate(page: Page, selectors: string[]): Promise<AnnotationBox[]> {
   const boxes: AnnotationBox[] = [];
@@ -77,46 +73,6 @@ export async function annotate(page: Page, selectors: string[]): Promise<Annotat
       // selector didn't resolve at all — skip.
     }
   }
-
-  await page.evaluate((data) => {
-    const prev = document.getElementById("__releasebot_overlay__");
-    if (prev) prev.remove();
-    const overlay = document.createElement("div");
-    overlay.id = "__releasebot_overlay__";
-    overlay.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
-    for (const item of data) {
-      const outline = document.createElement("div");
-      outline.style.cssText = [
-        `position:absolute`,
-        `left:${item.box.x}px`,
-        `top:${item.box.y}px`,
-        `width:${item.box.width}px`,
-        `height:${item.box.height}px`,
-        `outline:2px solid #ff3b30`,
-        `box-shadow:0 0 0 1px rgba(255,255,255,0.9) inset`,
-        `border-radius:2px`,
-      ].join(";");
-      const label = document.createElement("div");
-      label.textContent = String(item.selectorIndex + 1);
-      label.style.cssText = [
-        `position:absolute`,
-        `left:-8px`,
-        `top:-8px`,
-        `min-width:18px`,
-        `height:18px`,
-        `padding:0 5px`,
-        `background:#ff3b30`,
-        `color:#fff`,
-        `font:600 11px/18px -apple-system,system-ui,sans-serif`,
-        `text-align:center`,
-        `border-radius:9px`,
-        `box-shadow:0 0 0 1px #fff`,
-      ].join(";");
-      outline.appendChild(label);
-      overlay.appendChild(outline);
-    }
-    document.body.appendChild(overlay);
-  }, boxes);
 
   return boxes;
 }

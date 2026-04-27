@@ -57,24 +57,24 @@ export async function annotateRun(args: {
   for (const [idx, planStep] of args.plan.metadata.steps.entries()) {
     const stepN = idx + 1;
     const padded = String(stepN).padStart(2, "0");
-    const afterRaw = path.join(afterDir, `step-${padded}.raw.png`);
-    const beforeRaw = path.join(beforeDir, `step-${padded}.raw.png`);
+    const afterPng = path.join(afterDir, `step-${padded}.png`);
+    const beforePng = path.join(beforeDir, `step-${padded}.png`);
     const annotationJson = path.join(afterDir, `step-${padded}.annotation.json`);
     const annotatedPng = path.join(afterDir, `step-${padded}.annotated.png`);
     const bboxesPath = path.join(afterDir, `step-${padded}.bboxes.json`);
     const htmlPath = path.join(afterDir, `step-${padded}.html`);
 
-    if (!(await fileExists(afterRaw))) {
-      log(`  step ${stepN}: no raw screenshot — skipping annotation`);
+    if (!(await fileExists(afterPng))) {
+      log(`  step ${stepN}: no after screenshot — skipping annotation`);
       continue;
     }
-    if (!(await fileExists(beforeRaw))) {
-      log(`  step ${stepN}: no before raw screenshot — skipping annotation`);
+    if (!(await fileExists(beforePng))) {
+      log(`  step ${stepN}: no before screenshot — skipping annotation`);
       continue;
     }
 
     try {
-      const meta = await sharp(afterRaw).metadata();
+      const meta = await sharp(afterPng).metadata();
       const W = meta.width ?? 1440;
       const H = meta.height ?? 900;
 
@@ -87,7 +87,7 @@ export async function annotateRun(args: {
         log(`  step ${stepN}: prompting vision annotator...`);
         const observation = args.review.steps.find((s) => s.step_n === stepN)?.observation ?? "";
         const ctx: AnnotatorContext = {
-          rawPngPath: afterRaw,
+          rawPngPath: afterPng,
           htmlPath: (await fileExists(htmlPath)) ? htmlPath : undefined,
           plannerBboxes: await readBboxes(bboxesPath),
           stepDescription: planStep.description,
@@ -97,7 +97,7 @@ export async function annotateRun(args: {
           imageWidth: W,
           imageHeight: H,
         };
-        const result = await runVision(ctx, beforeRaw, { apiKey: args.apiKey });
+        const result = await runVision(ctx, beforePng, { apiKey: args.apiKey });
         if (result.errorMessage) {
           log(`  step ${stepN}: vision annotator error: ${result.errorMessage}`);
         }
@@ -115,7 +115,7 @@ export async function annotateRun(args: {
         continue;
       }
 
-      await renderPinCardSpotlightCropped(afterRaw, regions, annotatedPng, W, H);
+      await renderPinCardSpotlightCropped(afterPng, regions, annotatedPng, W, H);
       log(`  step ${stepN}: wrote ${path.relative(args.artifactsDir, annotatedPng)}`);
     } catch (err) {
       log(`  step ${stepN}: annotate failed: ${(err as Error).message}`);

@@ -113,7 +113,6 @@ async function parseResults(
   for (let n = 1; n <= expectedStepCount; n++) {
     const tc = byNumber.get(n);
     const screenshot = path.join(screenshotDir, stepScreenshotName(n));
-    const rawScreenshot = rawScreenshotPath(screenshot);
     const bboxes = await readBboxesSidecar(screenshotDir, n);
     if (!tc) {
       steps.push({
@@ -121,7 +120,6 @@ async function parseResults(
         status: "fail",
         error: `No Playwright test matched step-${String(n).padStart(2, "0")}`,
         screenshot,
-        rawScreenshot,
         ...(bboxes ? { bboxes } : {}),
       });
       continue;
@@ -130,13 +128,9 @@ async function parseResults(
     const status = lastResult?.status === "passed" ? "pass" : "fail";
     const error =
       status === "fail" ? summarizeError(lastResult) : undefined;
-    steps.push({ step_n: n, status, error, screenshot, rawScreenshot, ...(bboxes ? { bboxes } : {}) });
+    steps.push({ step_n: n, status, error, screenshot, ...(bboxes ? { bboxes } : {}) });
   }
   return steps;
-}
-
-function rawScreenshotPath(screenshot: string): string {
-  return screenshot.replace(/\.png$/, ".raw.png");
 }
 
 async function readBboxesSidecar(dir: string, stepNumber: number): Promise<BBox[] | undefined> {
@@ -170,7 +164,6 @@ function blankStepResults(count: number, screenshotDir: string, error: string): 
       status: "fail",
       error,
       screenshot,
-      rawScreenshot: rawScreenshotPath(screenshot),
     });
   }
   return out;

@@ -31,24 +31,24 @@ The spec body is injected into a file that already has these imports and hooks i
 
     // An afterEach hook is auto-injected that:
     //   1. reads the selectors registered via markAnnotations(...) at the top of the test,
-    //   2. draws red outlines over each match,
+    //   2. resolves their bounding boxes (used for focus-mode crops in the QA report),
     //   3. takes step-NN.png.
     // All three happen regardless of whether the test body threw — so even a
-    // failing expect() still yields an annotated screenshot.
+    // failing expect() still yields a screenshot and bbox sidecar.
 
 Do NOT include imports, SCREENSHOT_DIR, test.afterEach, or test.describe.configure in your spec body — they are provided. Just emit the test(...) calls, in order.
 
 Each test() MUST follow this skeleton:
 
     test("step-NN · <short description>", async ({ page }) => {
-      markAnnotations([/* 1-4 CSS selectors to outline */]);   // FIRST line of the body
+      markAnnotations([/* 1-4 CSS selectors that target the changed region */]);   // FIRST line of the body
       await page.goto("<relative URL>");
       // interactions: locator.click(), .fill(), .hover(), keyboard.press(), etc., as needed
       // assertions: await expect(locator).toBeVisible(); // or .toHaveText, .toHaveAttribute, etc.
       // NO annotate() call. NO page.screenshot — the harness handles both.
     });
 
-markAnnotations() MUST be the FIRST statement in every test body. Calling it up-front means the afterEach hook can still draw outlines even if a subsequent expect() throws, which is exactly what we want for debugging.
+markAnnotations() MUST be the FIRST statement in every test body. Calling it up-front means the afterEach hook can still resolve and persist the bboxes even if a subsequent expect() throws, which is exactly what we want for debugging.
 
 Rules:
 
@@ -62,7 +62,7 @@ Rules:
 - Do NOT split a single static section into one step per child element (one per button, one per row, one per preset). Assert on the section's container or its heading once; the screenshot captures the rest.
 - ONLY assert on things the diff actually introduces or modifies. Do NOT add "sanity" assertions on generic page structure (h1 presence, navbar links, etc.) — the diff didn't touch those, they're not a PR signal, and a failing sanity assertion halts the rest of the test. Aim for one assertion per test, the tightest possible to the diff.
 - Pick expect targets that are specific to the diff — new copy, new data-* attributes, new component names. Never something that would also appear on a login/404/empty-state screen.
-- Annotate selectors (passed to markAnnotations()) should target DOM nodes the diff introduced or modified. Use stable selectors (role, aria-label, data-testid). Every match of each selector is outlined — if a selector matches multiple elements (e.g. an aria-label that appears on both an inline ref and a sidebar pill), all matches get boxed with the same label number, which is usually what you want. If you specifically want to point at ONE region, scope the selector: prefix with a container selector like \`aside a[...]\`, \`[data-testid="issue-properties"] a\`, or similar.
+- Annotate selectors (passed to markAnnotations()) should target DOM nodes the diff introduced or modified. Use stable selectors (role, aria-label, data-testid). Every match of each selector is recorded as a bbox — if a selector matches multiple elements (e.g. an aria-label that appears on both an inline ref and a sidebar pill), all matches contribute to a single union region grouped under that selector, which is usually what you want for the focus-mode crop. If you specifically want to point at ONE region, scope the selector: prefix with a container selector like \`aside a[...]\`, \`[data-testid="issue-properties"] a\`, or similar.
 - 1 to 6 steps. Each test should be a complete, isolated scenario — no shared state between tests (each gets a fresh page).
 - NO page.waitForTimeout, NO arbitrary setTimeout, NO page.evaluate unless genuinely necessary. Rely on Playwright's auto-wait via expect() and locator actions.
 - {{AUTH_LINE}}
