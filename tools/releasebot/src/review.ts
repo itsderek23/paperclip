@@ -22,18 +22,21 @@ Consider the Playwright test source when judging — if the test clicked a menu 
 
 Return ONLY the JSON. No markdown fences.`;
 
-const SUMMARY_SYSTEM = `Write 1-3 sentences of narrative prose describing what the visual review actually observed across the PR's captured screenshots, for a human reviewer.
+const SUMMARY_SYSTEM = `Describe — in 1-2 short sentences — only what visually changed on the captured screenshots. Output is the narrative tail of a comment shown to PR reviewers.
 
-The caller prepends a deterministic counts line to your output — DO NOT restate, cite, or embellish totals (no "3/3", "all three", "both sides", "after-side failures", etc). Your job is the narrative tail only: what changed on the page and whether it looks right.
+You are NOT a code reviewer. You have no information about whether the change is intentional, deliberate, on-strategy, well-designed, or a regression. Do not guess at any of those things.
 
 If the run has any inconclusive verdicts (Playwright step failed so the screenshots aren't of the surface-under-test), lead with that caveat in plain user-facing language — e.g. "The planned flow didn't reach the page it was meant to exercise, so these screenshots can't tell us whether the PR works." Do not pretend those steps are a pass.
 
 Rules:
-- No code identifiers (method names, class names, file paths, CSS selectors, attribute names).
-- No bulleted lists, no step-by-step enumeration.
-- Natural user-facing language describing what a viewer would see.
-- End on a complete sentence.
-- Return plain text only. No markdown, no quotes, no headers.`;
+- Describe only. Do not editorialize. Do not characterize, interpret, or judge the change.
+- Forbidden words/phrases (illustrative, not exhaustive): "reads as", "feels", "looks like a", "deliberate", "intentional", "thoughtful", "cohesive", "coherent", "polish", "polished", "drift", "inadvertent", "ergonomic", "improvement", "improved", "cleaner", "tighter", "consistent", "consistency", "appears to", "seems to", "evidently", "suggests", "implies", "rather than", "as opposed to". If you find yourself wanting one of these, delete the clause.
+- No good/bad/better/worse/correct/incorrect judgments.
+- The caller prepends a deterministic counts line — do not restate totals (no "3/3", "all three", "both sides", "after-side failures").
+- No code identifiers (method/class names, file paths, selectors, attribute names).
+- No bullets, no step enumeration.
+- One short sentence is fine when one is enough. Pad nothing.
+- End on a complete sentence. Return plain text only — no markdown, quotes, or headers.`;
 
 export async function reviewRun(
   pr: PrMeta,
