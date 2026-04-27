@@ -17,6 +17,13 @@ export interface PlanMetadata {
   goal: string;
   rationale: string;
   steps: PlanStepMetadata[];
+  /** Set by the planner when the diff's visible UI is gated on runtime state,
+   * live data, or anything the test environment can't synthesize (e.g. a
+   * scheduled retry, a live in-progress run, a real third-party callback).
+   * One sentence explaining what we couldn't produce. Surfaced as a callout in
+   * the cutter comment so reviewers know "screenshots match" doesn't mean
+   * "we exercised the change". */
+  coverageNote?: string | null;
 }
 
 export interface Plan {

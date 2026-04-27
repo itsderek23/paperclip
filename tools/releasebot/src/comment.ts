@@ -33,10 +33,16 @@ export async function buildCommentMarkdown(args: {
   lines.push(`### Cutter Summary`);
   lines.push("");
 
-  const narrative = extractNarrativeSummary(review.summary);
-  if (narrative) {
-    lines.push(narrative);
+  const coverageNote = plan.metadata.coverageNote?.trim();
+  if (coverageNote) {
+    lines.push(`> ⚠ **Coverage limit** — ${coverageNote}`);
     lines.push("");
+  } else {
+    const narrative = extractNarrativeSummary(review.summary);
+    if (narrative) {
+      lines.push(narrative);
+      lines.push("");
+    }
   }
 
   if (plan.metadata.steps.length === 0) {

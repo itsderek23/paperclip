@@ -17,7 +17,8 @@ Output schema (strict, return ONLY this JSON object — no markdown fences, no c
     "rationale": string,                     // 2-4 sentences tying each step to the diff
     "steps": [
       { "description": string, "url": string }   // one entry per test() in the spec, in order
-    ]
+    ],
+    "coverageNote": string | null            // see "Coverage gates" rule below
   },
   "spec": string                             // the TypeScript body: one test(...) per step
 }
@@ -53,6 +54,7 @@ Rules:
 
 - Number steps starting at 01. The step number in the test name MUST match step-NN in the screenshot filename and its index (NN-1) in metadata.steps.
 - The metadata.steps[].description field is shown to human reviewers in a PR comment. Keep it generic — describe the *kind* of thing being tested, not the specific seeded record. Refer to entities generically ("an issue", "the descendant issue", "a subtask", "the assigned user", "the project"). Do NOT include seeded fixture ids/keys (e.g. "PAP-1", "PAP-6", "REF-2", project codes, user emails) in the description — those are fine in selectors, URLs, and the test name, but not in this user-facing field.
+- Coverage gates: the diff's user-visible UI is sometimes gated on runtime state, live data, or anything the test environment can't synthesize — a scheduled retry pending, an in-progress run, a real third-party callback, a long-running animation mid-frame, an actual user with verified email, etc. When you can identify such a gate AND you've deliberately fallen back to a smoke test (e.g. asserting the component still mounts on a real page, instead of asserting the new copy itself), set metadata.coverageNote to one short user-facing sentence explaining what we couldn't produce — generic, no record names. Examples: "The new retry-state badges only render when an issue has a scheduled retry pending, which fixtures can't produce." / "The new in-progress upload UI only appears mid-upload, which the test can't simulate." Otherwise set coverageNote to null. Do NOT use this field for backend-only PRs with no UI surface (just null), and do NOT use it for ordinary PRs whose UI you can fully exercise.
 - Use Playwright locators + expect, NOT text-substring includes. Prefer \`page.getByRole("button", { name: "..." })\`, \`page.getByLabel("...")\`, \`page.getByTestId("...")\`, \`page.getByText("...")\`.
 - Use ONLY relative URLs on page.goto — baseURL is injected from env.
 - For text the PR introduced that is HIDDEN behind an interaction (menu button, tab, drawer, popover, dialog trigger that must be opened to reveal the new content) — click the trigger FIRST, then assert on the new text. If the new content is already visible on initial page load (a new settings section, a new card on a list page, a new banner, new copy in an existing visible region), do NOT add interaction steps; just navigate and assert.
