@@ -11,7 +11,8 @@ Given the step's description, the Playwright test source that produced it, and t
 Reply with strict JSON:
 { "verdict": "pass" | "fail" | "intentional_change",
   "observation": "<one sentence describing what you see changed or didn't>",
-  "expected": "<only if verdict=fail, one sentence describing what correct would look like>" }
+  "expected": "<only if verdict=fail, one sentence describing what correct would look like>",
+  "pageKind": "<2-4 word noun phrase naming the page or surface, in app-agnostic plain English. Examples: 'Issue detail page', 'Project board', 'Agent settings — overview tab', 'Sign-in page'. Use the screenshot and URL together to name what page this is. If the page is unrecognizable (error page, 404, blank state), return 'Unknown page'.>" }
 
 Use "pass" when before and after look identical / unchanged for this surface.
 Use "intentional_change" when the after clearly reflects the PR's intent and looks correct.

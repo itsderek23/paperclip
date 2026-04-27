@@ -108,6 +108,7 @@ export interface StepReview {
   verdict: Verdict;
   observation: string;
   expected?: string;
+  pageKind?: string;
 }
 
 export interface RunReview {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Plan, PrMeta, SideResult } from "./types.ts";
+import type { Plan, PrMeta, RunReview, SideResult } from "./types.ts";
 
 const MARKER = "<!-- releasebot:comment-marker v1 -->";
 
@@ -24,16 +24,17 @@ export async function buildCommentMarkdown(args: {
   plan: Plan;
   before: SideResult;
   after: SideResult;
+  review: RunReview;
   artifactsDir: string;
 }): Promise<string> {
-  const { pr, plan, before, after, artifactsDir } = args;
+  const { pr, plan, before, after, review, artifactsDir } = args;
   const lines: string[] = [];
   lines.push(MARKER);
-  lines.push(`### releasebot · PR #${pr.number}`);
+  lines.push(`### cutter · PR #${pr.number}`);
   lines.push("");
 
   if (plan.metadata.steps.length === 0) {
-    lines.push("releasebot skipped this PR — see [full report](report.html) for why.");
+    lines.push("cutter skipped this PR — see [full report](report.html) for why.");
     lines.push("");
     return lines.join("\n");
   }
@@ -41,17 +42,34 @@ export async function buildCommentMarkdown(args: {
   const baseShort = pr.baseSha.slice(0, 7);
   const headShort = pr.headSha.slice(0, 7);
 
-  // Group consecutive steps with the same URL under one "UI changes on" line.
-  const groups: Array<{ url: string; stepIndices: number[] }> = [];
+  const groupKey = (i: number): string => {
+    const rv = review.steps.find((s) => s.step_n === i + 1);
+    const kind = rv?.pageKind?.trim();
+    return kind && kind.length > 0 ? `kind:${kind}` : `url:${plan.metadata.steps[i].url}`;
+  };
+
+  const groups: Array<{ key: string; pageKind?: string; url: string; stepIndices: number[] }> = [];
   for (let i = 0; i < plan.metadata.steps.length; i++) {
-    const url = plan.metadata.steps[i].url;
+    const key = groupKey(i);
     const last = groups[groups.length - 1];
-    if (last && last.url === url) last.stepIndices.push(i);
-    else groups.push({ url, stepIndices: [i] });
+    if (last && last.key === key) last.stepIndices.push(i);
+    else {
+      const rv = review.steps.find((s) => s.step_n === i + 1);
+      groups.push({
+        key,
+        pageKind: rv?.pageKind?.trim() || undefined,
+        url: plan.metadata.steps[i].url,
+        stepIndices: [i],
+      });
+    }
   }
 
   for (const group of groups) {
-    lines.push(`UI changes on \`${group.url}\`:`);
+    if (group.pageKind) {
+      lines.push(`**${group.pageKind}**`);
+    } else {
+      lines.push(`UI changes on \`${group.url}\`:`);
+    }
     lines.push("");
     for (const i of group.stepIndices) {
       const step = plan.metadata.steps[i];

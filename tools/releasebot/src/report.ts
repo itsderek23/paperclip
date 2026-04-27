@@ -39,7 +39,7 @@ export async function writeReport(args: {
   await fs.writeFile(markdownPath, renderMarkdown({ pr, plan, before, after, review }));
   await fs.writeFile(htmlPath, await renderHtml({ pr, plan, before, after, review, artifactsDir }));
 
-  const commentMarkdown = await buildCommentMarkdown({ pr, plan, before, after, artifactsDir });
+  const commentMarkdown = await buildCommentMarkdown({ pr, plan, before, after, review, artifactsDir });
   await fs.writeFile(commentPath, commentMarkdown);
   await fs.writeFile(previewPath, buildCommentPreviewHtml({ pr, commentMarkdown }));
 
