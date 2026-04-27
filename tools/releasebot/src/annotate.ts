@@ -61,6 +61,7 @@ export async function annotateRun(args: {
     const beforePng = path.join(beforeDir, `step-${padded}.png`);
     const annotationJson = path.join(afterDir, `step-${padded}.annotation.json`);
     const annotatedPng = path.join(afterDir, `step-${padded}.annotated.png`);
+    const annotatedFullPng = path.join(afterDir, `step-${padded}.annotated.full.png`);
     const bboxesPath = path.join(afterDir, `step-${padded}.bboxes.json`);
     const htmlPath = path.join(afterDir, `step-${padded}.html`);
 
@@ -115,8 +116,8 @@ export async function annotateRun(args: {
         continue;
       }
 
-      await renderPinCardSpotlightCropped(afterPng, regions, annotatedPng, W, H);
-      log(`  step ${stepN}: wrote ${path.relative(args.artifactsDir, annotatedPng)}`);
+      await renderPinCardSpotlightCropped(afterPng, regions, annotatedPng, annotatedFullPng, W, H);
+      log(`  step ${stepN}: wrote ${path.relative(args.artifactsDir, annotatedPng)} + ${path.relative(args.artifactsDir, annotatedFullPng)}`);
     } catch (err) {
       log(`  step ${stepN}: annotate failed: ${(err as Error).message}`);
     }
@@ -125,6 +126,10 @@ export async function annotateRun(args: {
 
 export function annotatedScreenshotPath(screenshotPath: string): string {
   return screenshotPath.replace(/\.png$/, ".annotated.png");
+}
+
+export function annotatedFullScreenshotPath(screenshotPath: string): string {
+  return screenshotPath.replace(/\.png$/, ".annotated.full.png");
 }
 
 export async function preferAnnotated(screenshotPath: string): Promise<string> {

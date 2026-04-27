@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { annotatedFullScreenshotPath, annotatedScreenshotPath } from "./annotate.ts";
 import type { Plan, PrMeta, RunReview, SideResult } from "./types.ts";
 
 const MARKER = "<!-- releasebot:comment-marker v1 -->";
@@ -150,10 +151,14 @@ async function buildImageCell(args: {
   if (!stepResult) return `_screenshot unavailable_`;
 
   const fullRel = path.relative(artifactsDir, stepResult.screenshot);
-  const annotatedAbs = stepResult.screenshot.replace(/\.png$/, ".annotated.png");
+  const annotatedAbs = annotatedScreenshotPath(stepResult.screenshot);
   if (side === "after" && (await fileExists(annotatedAbs))) {
     const annotatedRel = path.relative(artifactsDir, annotatedAbs);
-    return `<a href="${annotatedRel}" target="_blank" rel="noopener"><img src="${annotatedRel}" alt="${side}"></a>`;
+    const annotatedFullAbs = annotatedFullScreenshotPath(stepResult.screenshot);
+    const linkRel = (await fileExists(annotatedFullAbs))
+      ? path.relative(artifactsDir, annotatedFullAbs)
+      : annotatedRel;
+    return `<a href="${linkRel}" target="_blank" rel="noopener"><img src="${annotatedRel}" alt="${side}"></a>`;
   }
   const cropAbs = stepResult.screenshot.replace(/\.png$/, ".crop.png");
   const cropExists = await fileExists(cropAbs);

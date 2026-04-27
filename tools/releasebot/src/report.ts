@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { annotatedFullScreenshotPath, annotatedScreenshotPath } from "./annotate.ts";
 import { buildCommentMarkdown } from "./comment.ts";
 import { buildCommentPreviewHtml } from "./comment-preview.ts";
 import type { BBox, Plan, PrMeta, RunReview, SideResult } from "./types.ts";
@@ -124,9 +125,13 @@ async function renderHtml(args: {
     const rv = review.steps.find((s) => s.step_n === i + 1);
     const beforeSrc = b ? path.relative(artifactsDir, b.screenshot) : "";
     const afterSrc = a ? path.relative(artifactsDir, a.screenshot) : "";
-    const annotatedAbs = a ? a.screenshot.replace(/\.png$/, ".annotated.png") : "";
+    const annotatedAbs = a ? annotatedScreenshotPath(a.screenshot) : "";
     const annotatedExists = annotatedAbs ? await fileExists(annotatedAbs) : false;
     const annotatedRel = annotatedExists ? path.relative(artifactsDir, annotatedAbs) : "";
+    const annotatedFullAbs = a ? annotatedFullScreenshotPath(a.screenshot) : "";
+    const annotatedFullRel = annotatedFullAbs && (await fileExists(annotatedFullAbs))
+      ? path.relative(artifactsDir, annotatedFullAbs)
+      : annotatedRel;
     const verdict = rv?.verdict ?? "pass";
     const obs = rv?.observation ?? "";
     const crop = !annotatedExists && b && a ? await maybeBuildCrop(b.screenshot, a.screenshot, b.bboxes, a.bboxes, artifactsDir) : null;
@@ -142,7 +147,7 @@ async function renderHtml(args: {
       focusBlock = `
   <div class="focus focus-annotated">
     <p class="focus-label">Change focus</p>
-    <figure class="annotated-shot"><a href="${escapeAttr(annotatedRel)}" target="_blank" rel="noopener"><img src="${escapeAttr(annotatedRel)}" /></a></figure>
+    <figure class="annotated-shot"><a href="${escapeAttr(annotatedFullRel)}" target="_blank" rel="noopener"><img src="${escapeAttr(annotatedRel)}" /></a></figure>
   </div>
   <details class="full-toggle"><summary>Show full before/after screenshots</summary>${fullPair}</details>`;
     } else if (crop) {

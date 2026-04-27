@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import sharp from "sharp";
 import type { BBox } from "./types.ts";
 import type { Region } from "./annotators.ts";
@@ -154,13 +155,21 @@ function renderPinCard(box: BBox, layout: PinCardLayout, caption: string, idx: n
     `<circle cx="${pinCx}" cy="${pinCy}" r="${CARD_PIN_RADIUS}" fill="${ACCENT}"/>`,
     `<text x="${pinCx}" y="${pinCy + 5}" font-family="Helvetica, Arial, -apple-system, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">${idx + 1}</text>`,
     `<text x="${textX}" y="${textY}" font-family="Helvetica, Arial, -apple-system, system-ui, sans-serif" font-size="${CARD_FONT_SIZE}" font-weight="500" fill="${CARD_TEXT}">${captionEsc}</text>`,
-    `<rect x="${box.x - offsetX - 2}" y="${box.y - offsetY - 2}" width="${box.width + 4}" height="${box.height + 4}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-opacity="0.7" rx="4"/>`,
   ].join("");
 }
 
-export async function renderPinCardSpotlightCropped(rawPath: string, regions: Region[], outPath: string, W: number, H: number): Promise<void> {
+export async function renderPinCardSpotlightCropped(
+  rawPath: string,
+  regions: Region[],
+  outPath: string,
+  fullOutPath: string,
+  W: number,
+  H: number,
+): Promise<void> {
   if (regions.length === 0) {
-    await sharp(rawPath).toFile(outPath);
+    const buf = await sharp(rawPath).toBuffer();
+    await fs.writeFile(outPath, buf);
+    await fs.writeFile(fullOutPath, buf);
     return;
   }
   const layouts = layoutPinCards(regions, W, H);
@@ -178,7 +187,7 @@ export async function renderPinCardSpotlightCropped(rawPath: string, regions: Re
     x2 = Math.max(x2, e.x + e.w);
     y2 = Math.max(y2, e.y + e.h);
   }
-  const PAD = 32;
+  const PAD = 100;
   const left = Math.max(0, Math.round(x1 - PAD));
   const top = Math.max(0, Math.round(y1 - PAD));
   const right = Math.min(W, Math.round(x2 + PAD));
@@ -187,19 +196,23 @@ export async function renderPinCardSpotlightCropped(rawPath: string, regions: Re
   const cropH = Math.max(1, bottom - top);
 
   const holes = regions
-    .map((r) => `M ${r.bbox.x - left} ${r.bbox.y - top} h ${r.bbox.width} v ${r.bbox.height} h ${-r.bbox.width} Z`)
+    .map((r) => `M ${r.bbox.x} ${r.bbox.y} h ${r.bbox.width} v ${r.bbox.height} h ${-r.bbox.width} Z`)
     .join(" ");
-  const dimPath = `M 0 0 H ${cropW} V ${cropH} H 0 Z ${holes}`;
+  const dimPath = `M 0 0 H ${W} V ${H} H 0 Z ${holes}`;
 
-  const cards = regions.map((r, i) => renderPinCard(r.bbox, layouts[i], r.caption, i, left, top)).join("");
+  const cards = regions.map((r, i) => renderPinCard(r.bbox, layouts[i], r.caption, i, 0, 0)).join("");
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${cropW}" height="${cropH}">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
     ${shadowFilterDef()}
     <path d="${dimPath}" fill="black" fill-opacity="${SPOTLIGHT_DIM_OPACITY}" fill-rule="evenodd"/>
     ${cards}
   </svg>`;
-  await sharp(rawPath)
-    .extract({ left, top, width: cropW, height: cropH })
+  const fullBuffer = await sharp(rawPath)
     .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .png()
+    .toBuffer();
+  await fs.writeFile(fullOutPath, fullBuffer);
+  await sharp(fullBuffer)
+    .extract({ left, top, width: cropW, height: cropH })
     .toFile(outPath);
 }
