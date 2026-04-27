@@ -124,9 +124,12 @@ async function renderHtml(args: {
     const rv = review.steps.find((s) => s.step_n === i + 1);
     const beforeSrc = b ? path.relative(artifactsDir, b.screenshot) : "";
     const afterSrc = a ? path.relative(artifactsDir, a.screenshot) : "";
+    const annotatedAbs = a ? a.screenshot.replace(/\.png$/, ".annotated.png") : "";
+    const annotatedExists = annotatedAbs ? await fileExists(annotatedAbs) : false;
+    const annotatedRel = annotatedExists ? path.relative(artifactsDir, annotatedAbs) : "";
     const verdict = rv?.verdict ?? "pass";
     const obs = rv?.observation ?? "";
-    const crop = (b && a) ? await maybeBuildCrop(b.screenshot, a.screenshot, b.bboxes, a.bboxes, artifactsDir) : null;
+    const crop = !annotatedExists && b && a ? await maybeBuildCrop(b.screenshot, a.screenshot, b.bboxes, a.bboxes, artifactsDir) : null;
 
     const fullPair = `
   <div class="pair">
@@ -134,8 +137,16 @@ async function renderHtml(args: {
     <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption>${afterSrc ? `<a href="${escapeAttr(afterSrc)}" target="_blank" rel="noopener"><img src="${escapeAttr(afterSrc)}" /></a>` : `<div class="missing">missing</div>`}</figure>
   </div>`;
 
-    const focusBlock = crop
-      ? `
+    let focusBlock: string;
+    if (annotatedExists) {
+      focusBlock = `
+  <div class="focus focus-annotated">
+    <p class="focus-label">Change focus</p>
+    <figure class="annotated-shot"><a href="${escapeAttr(annotatedRel)}" target="_blank" rel="noopener"><img src="${escapeAttr(annotatedRel)}" /></a></figure>
+  </div>
+  <details class="full-toggle"><summary>Show full before/after screenshots</summary>${fullPair}</details>`;
+    } else if (crop) {
+      focusBlock = `
   <div class="focus">
     <p class="focus-label">Change focus</p>
     <div class="pair pair-crop">
@@ -143,8 +154,10 @@ async function renderHtml(args: {
       <figure><figcaption>after · ${pr.headSha.slice(0, 7)}</figcaption><a href="${escapeAttr(crop.afterCropRel)}" target="_blank" rel="noopener"><img src="${escapeAttr(crop.afterCropRel)}" /></a></figure>
     </div>
   </div>
-  <details class="full-toggle"><summary>Show full screenshot</summary>${fullPair}</details>`
-      : fullPair;
+  <details class="full-toggle"><summary>Show full screenshot</summary>${fullPair}</details>`;
+    } else {
+      focusBlock = fullPair;
+    }
 
     const repairBlock = a?.repair ? renderRepairBlock(a.repair, artifactsDir) : "";
     rows.push(`
@@ -188,6 +201,9 @@ async function renderHtml(args: {
   .pair-crop figure a { display: flex; justify-content: center; align-items: center; padding: .5rem; background: #fafafa; }
   .focus { margin: 0 0 .75rem; }
   .focus-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #555; margin: 0 0 .4rem; font-weight: 600; }
+  .annotated-shot { margin: 0; }
+  .annotated-shot img { display: block; max-width: 100%; height: auto; border-radius: 6px; }
+  .annotated-shot a { display: block; }
   details.full-toggle { margin-top: .75rem; }
   details.full-toggle > summary { cursor: pointer; font-size: .8rem; color: #555; padding: .35rem .5rem; border: 1px dashed #ccc; border-radius: 4px; display: inline-block; user-select: none; }
   details.full-toggle[open] > summary { margin-bottom: .5rem; }
@@ -385,6 +401,15 @@ async function maybeBuildCrop(
     beforeCropRel: path.relative(artifactsDir, beforeOut),
     afterCropRel: path.relative(artifactsDir, afterOut),
   };
+}
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function escapeHtml(s: string): string {

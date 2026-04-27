@@ -92,6 +92,11 @@ async function buildImageCell(args: {
   if (!stepResult) return `_screenshot unavailable_`;
 
   const fullRel = path.relative(artifactsDir, stepResult.screenshot);
+  const annotatedAbs = stepResult.screenshot.replace(/\.png$/, ".annotated.png");
+  if (side === "after" && (await fileExists(annotatedAbs))) {
+    const annotatedRel = path.relative(artifactsDir, annotatedAbs);
+    return `<a href="${annotatedRel}" target="_blank" rel="noopener"><img src="${annotatedRel}" alt="${side}"></a>`;
+  }
   const cropAbs = stepResult.screenshot.replace(/\.png$/, ".crop.png");
   const cropExists = await fileExists(cropAbs);
   const thumbRel = cropExists ? path.relative(artifactsDir, cropAbs) : fullRel;

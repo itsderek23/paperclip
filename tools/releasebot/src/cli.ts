@@ -14,6 +14,7 @@ import { runPlanAgainst } from "./run.ts";
 import { runRepairPass } from "./repair.ts";
 import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
+import { annotateRun } from "./annotate.ts";
 import { gatherDiffContext } from "./diff-context.ts";
 import type { Plan, Side } from "./types.ts";
 
@@ -27,6 +28,8 @@ interface Args {
   clean: boolean;
   reportOnly: boolean;
   reviewOnly: boolean;
+  annotateOnly: boolean;
+  rePrompt: boolean;
   planFromCache: boolean;
   forceBroken: boolean;
   forceNoUi: boolean;
@@ -66,7 +69,7 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--plan-from-cache] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--plan-from-cache] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
@@ -83,6 +86,8 @@ function parseArgs(argv: string[]): Args {
     clean: flags.has("--clean"),
     reportOnly: flags.has("--report-only"),
     reviewOnly: flags.has("--review-only"),
+    annotateOnly: flags.has("--annotate-only"),
+    rePrompt: flags.has("--re-prompt"),
     planFromCache: flags.has("--plan-from-cache"),
     forceBroken: flags.has("--force-broken"),
     forceNoUi: flags.has("--force-no-ui"),
@@ -133,6 +138,11 @@ async function main(): Promise<void> {
 
   if (args.reviewOnly) {
     await rereviewFromCache(artifactsDir, apiKey);
+    return;
+  }
+
+  if (args.annotateOnly) {
+    await reannotateFromCache(artifactsDir, apiKey, { forceReprompt: args.rePrompt });
     return;
   }
 
@@ -373,6 +383,22 @@ async function main(): Promise<void> {
     const review = await reviewRun(pr, plan, beforeResult, afterResult, { apiKey });
     await fs.writeFile(path.join(artifactsDir, "review.json"), JSON.stringify(review, null, 2));
 
+    log("annotating after-side screenshots...");
+    try {
+      await annotateRun({
+        pr,
+        plan,
+        after: afterResult,
+        review,
+        artifactsDir,
+        apiKey,
+        forceReprompt: args.rePrompt,
+        log,
+      });
+    } catch (err) {
+      log(`annotate stage failed: ${(err as Error).message} — continuing without annotated PNGs`);
+    }
+
     log("writing report...");
     const { markdownPath, htmlPath, commentPath, previewPath } = await writeReport({
       pr,
@@ -517,6 +543,42 @@ async function rereviewFromCache(artifactsDir: string, apiKey: string): Promise<
   console.log("");
   console.log(`  ${review.summary}`);
   console.log("");
+  log(`  markdown: ${markdownPath}`);
+  log(`  html:     ${htmlPath}`);
+  log(`  comment:  ${commentPath}`);
+  log(`  preview:  ${previewPath}`);
+}
+
+async function reannotateFromCache(
+  artifactsDir: string,
+  apiKey: string,
+  options: { forceReprompt: boolean },
+): Promise<void> {
+  log(`re-running annotate + report from cached artifacts (no stacks, no Playwright${options.forceReprompt ? ", forcing re-prompt" : ", reusing cached annotations when present"})...`);
+  const read = async (name: string): Promise<unknown> =>
+    JSON.parse(await fs.readFile(path.join(artifactsDir, name), "utf8"));
+  const pr = (await read("pr.json")) as Parameters<typeof annotateRun>[0]["pr"];
+  const plan = (await read("plan.json")) as Plan;
+  const before = (await read(path.join("before", "steps.json"))) as Parameters<typeof writeReport>[0]["before"];
+  const after = (await read(path.join("after", "steps.json"))) as Parameters<typeof writeReport>[0]["after"];
+  const review = (await read("review.json")) as Parameters<typeof writeReport>[0]["review"];
+  log("  annotating after-side screenshots...");
+  try {
+    await annotateRun({
+      pr,
+      plan,
+      after,
+      review,
+      artifactsDir,
+      apiKey,
+      forceReprompt: options.forceReprompt,
+      log,
+    });
+  } catch (err) {
+    log(`  annotate stage failed: ${(err as Error).message} — continuing`);
+  }
+  log("  writing report...");
+  const { markdownPath, htmlPath, commentPath, previewPath } = await writeReport({ pr, plan, before, after, review, artifactsDir });
   log(`  markdown: ${markdownPath}`);
   log(`  html:     ${htmlPath}`);
   log(`  comment:  ${commentPath}`);
