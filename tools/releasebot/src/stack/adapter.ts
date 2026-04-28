@@ -17,7 +17,13 @@ export interface StackAdapter {
   install(worktree: string): Promise<void>;
   boot(worktree: string, port: number, homeDir: string): Promise<BootedStack>;
   buildSeedSpec?(ctx: SeedContext): Promise<FixtureSpec>;
-  seed?(baseUrl: string, spec: FixtureSpec, artifactsDir: string, sideLabel: string): Promise<FixtureSummary>;
+  seed?(
+    baseUrl: string,
+    spec: FixtureSpec,
+    artifactsDir: string,
+    sideLabel: string,
+    initialSummary?: FixtureSummary,
+  ): Promise<FixtureSummary>;
   provideAuth?(baseUrl: string, artifactsDir: string, sideLabel: Side): Promise<AuthContext | undefined>;
   promptHints?(): Promise<string>;
 }

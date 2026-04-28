@@ -44,9 +44,10 @@ export async function executeFixtureSpec(args: {
   spec: FixtureSpec;
   artifactsDir: string;
   sideLabel: string;
+  initialSummary?: FixtureSummary;
 }): Promise<FixtureSummary> {
-  const { baseUrl, spec, artifactsDir, sideLabel } = args;
-  const summary = await executeSpec(baseUrl, spec);
+  const { baseUrl, spec, artifactsDir, sideLabel, initialSummary } = args;
+  const summary = await executeSpec(baseUrl, spec, initialSummary);
   await fs.writeFile(path.join(artifactsDir, `fixtures.${sideLabel}.json`), JSON.stringify(summary, null, 2));
   return summary;
 }

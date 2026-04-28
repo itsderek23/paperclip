@@ -78,8 +78,14 @@ export class PaperclipAdapter implements StackAdapter {
     });
   }
 
-  async seed(baseUrl: string, spec: FixtureSpec, artifactsDir: string, sideLabel: string): Promise<FixtureSummary> {
-    return executeFixtureSpec({ baseUrl, spec, artifactsDir, sideLabel });
+  async seed(
+    baseUrl: string,
+    spec: FixtureSpec,
+    artifactsDir: string,
+    sideLabel: string,
+    initialSummary?: FixtureSummary,
+  ): Promise<FixtureSummary> {
+    return executeFixtureSpec({ baseUrl, spec, artifactsDir, sideLabel, initialSummary });
   }
 
   async promptHints(): Promise<string> {

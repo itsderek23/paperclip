@@ -18,7 +18,7 @@ import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
 import { annotateRun } from "./annotate.ts";
 import { gatherDiffContext } from "./diff-context.ts";
-import type { Plan, Side } from "./types.ts";
+import type { FixtureSummary, Plan, Side } from "./types.ts";
 
 type StackName = "paperclip" | "caldiy" | "openwebui";
 type PlannerName = "builtin" | "claude-code";
@@ -343,7 +343,7 @@ async function main(): Promise<void> {
 
   try {
     let fixtures: Awaited<ReturnType<NonNullable<typeof adapter.seed>>> | undefined;
-    if (adapter.buildSeedSpec && adapter.seed) {
+    if (args.planner === "builtin" && adapter.buildSeedSpec && adapter.seed) {
       log("building seed spec (reading adjacent tests + synthesizing via LLM)...");
       const spec = await adapter
         .buildSeedSpec({ diff, apiKey, artifactsDir, worktreePath: afterWt })
@@ -401,15 +401,40 @@ async function main(): Promise<void> {
     });
     const plan = planResult.plan;
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
+    let beforeFixtures: FixtureSummary | undefined;
+    let afterFixtures: FixtureSummary | undefined;
+    if (planResult.baseSeed && adapter.seed) {
+      log(`  harness returned baseSeed with ${planResult.baseSeed.entities.length} entities — applying on both sides`);
+      await fs.writeFile(
+        path.join(artifactsDir, "base-seed.json"),
+        JSON.stringify(planResult.baseSeed, null, 2),
+      );
+      beforeFixtures = await adapter
+        .seed(beforeStack.baseUrl, planResult.baseSeed, artifactsDir, "before")
+        .catch((e) => {
+          log(`  before baseSeed apply failed: ${(e as Error).message}`);
+          return undefined;
+        });
+      afterFixtures = await adapter
+        .seed(afterStack.baseUrl, planResult.baseSeed, artifactsDir, "after")
+        .catch((e) => {
+          log(`  after baseSeed apply failed: ${(e as Error).message}`);
+          return undefined;
+        });
+      if (beforeFixtures) fixtures = beforeFixtures;
+    }
     if (planResult.seedExtension && adapter.seed) {
       log(`  harness returned seedExtension with ${planResult.seedExtension.entities.length} entities — applying on after-side`);
       await fs.writeFile(
         path.join(artifactsDir, "seed-extension.json"),
         JSON.stringify(planResult.seedExtension, null, 2),
       );
-      await adapter
-        .seed(afterStack.baseUrl, planResult.seedExtension, artifactsDir, "after")
-        .catch((e) => log(`  seedExtension apply failed: ${(e as Error).message}`));
+      afterFixtures = await adapter
+        .seed(afterStack.baseUrl, planResult.seedExtension, artifactsDir, "after", afterFixtures)
+        .catch((e) => {
+          log(`  seedExtension apply failed: ${(e as Error).message}`);
+          return afterFixtures;
+        });
     }
     printPlan(plan);
 
@@ -424,10 +449,12 @@ async function main(): Promise<void> {
       return;
     }
 
+    const beforePlan = interpolatePlan(plan, beforeFixtures ?? fixtures);
+    const afterPlan = interpolatePlan(plan, afterFixtures ?? beforeFixtures ?? fixtures);
     log("running plan (before)...");
-    let beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
+    let beforeResult = await runPlanAgainst(beforePlan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
     log("running plan (after)...");
-    let afterResult = await runPlanAgainst(plan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
+    let afterResult = await runPlanAgainst(afterPlan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
 
     const needsRepair = afterResult.steps.some((s) => s.status === "fail");
     if (needsRepair) {
@@ -747,6 +774,23 @@ async function writePreflightFailureReport(
   await fs.writeFile(path.join(artifactsDir, "report.md"), lines.join("\n"));
 }
 
+function interpolatePlan(plan: Plan, fixtures: FixtureSummary | undefined): Plan {
+  if (!fixtures || Object.keys(fixtures).length === 0) return plan;
+  const subst = (s: string): string =>
+    s.replace(/\{\{([a-z0-9_]+)\.([a-z0-9_]+)\}\}/gi, (_m, name: string, field: string) => {
+      const v = fixtures[name]?.values?.[field];
+      return v ?? `{{${name}.${field}}}`;
+    });
+  return {
+    ...plan,
+    metadata: {
+      ...plan.metadata,
+      steps: plan.metadata.steps.map((s) => ({ ...s, url: subst(s.url) })),
+    },
+    spec: subst(plan.spec),
+  };
+}
+
 interface RunPlannerArgs {
   planner: PlannerName;
   pr: Parameters<typeof generatePlan>[0];
@@ -762,6 +806,7 @@ interface RunPlannerArgs {
 
 interface RunPlannerResult {
   plan: Plan;
+  baseSeed: Awaited<ReturnType<typeof runPlanHarness>>["baseSeed"];
   seedExtension: Awaited<ReturnType<typeof runPlanHarness>>["seedExtension"];
 }
 
@@ -775,7 +820,7 @@ async function runPlanner(args: RunPlannerArgs): Promise<RunPlannerResult> {
     sourceContext: args.sourceContext,
     authContext: args.authContext,
   });
-  return { plan, seedExtension: null };
+  return { plan, baseSeed: null, seedExtension: null };
 }
 
 async function runClaudeCodePlanner(args: RunPlannerArgs): Promise<RunPlannerResult> {
@@ -793,7 +838,7 @@ async function runClaudeCodePlanner(args: RunPlannerArgs): Promise<RunPlannerRes
     artifactsDir: args.artifactsDir,
     log,
   });
-  return { plan: result.plan, seedExtension: result.seedExtension };
+  return { plan: result.plan, baseSeed: result.baseSeed, seedExtension: result.seedExtension };
 }
 
 async function planWithGroundingRetry(

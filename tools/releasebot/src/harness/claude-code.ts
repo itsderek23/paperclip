@@ -13,6 +13,7 @@ export interface RunHarnessArgs {
 
 export interface HarnessResult {
   plan: Plan;
+  baseSeed: FixtureSpec | null;
   seedExtension: FixtureSpec | null;
   rawOutput: string;
   cost: { usd?: number; durationMs?: number };
@@ -60,6 +61,7 @@ export async function runPlanHarness(args: RunHarnessArgs): Promise<HarnessResul
 
   return {
     plan: inner.plan,
+    baseSeed: inner.baseSeed ?? null,
     seedExtension: inner.seedExtension ?? null,
     rawOutput: stdout,
     cost: { usd: envelope.totalCostUsd, durationMs },
@@ -118,6 +120,7 @@ function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
 
 interface HarnessJson {
   plan: Plan;
+  baseSeed?: FixtureSpec | null;
   seedExtension?: FixtureSpec | null;
 }
 
@@ -158,9 +161,10 @@ function validateHarnessShape(obj: unknown): asserts obj is HarnessJson {
   if (!o.plan || typeof o.plan !== "object") {
     throw new Error("harness output missing .plan object");
   }
-  if (o.seedExtension !== undefined && o.seedExtension !== null) {
-    if (typeof o.seedExtension !== "object") {
-      throw new Error("harness output .seedExtension must be a FixtureSpec object or null");
+  for (const key of ["baseSeed", "seedExtension"] as const) {
+    const v = o[key];
+    if (v !== undefined && v !== null && typeof v !== "object") {
+      throw new Error(`harness output .${key} must be a FixtureSpec object or null`);
     }
   }
 }

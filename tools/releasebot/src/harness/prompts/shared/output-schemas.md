@@ -15,11 +15,19 @@
     },
     "spec": "string  // TypeScript body: one test(...) per step. Empty when surface is none"
   },
+  "baseSeed": null,
   "seedExtension": null
 }
 ```
 
-If the base seed is sufficient for the diff, set `seedExtension` to `null`. Otherwise return a `FixtureSpec`:
+You return TWO seed specs (each may be `null`):
+
+- **`baseSeed`** — applied to BOTH the before-side and after-side stacks. This is the realistic baseline data the UI needs to render anything (a company, a couple of issues, etc.). Without this, almost every page is an empty state. Author one whenever the plan asserts on routes that need a seeded company / issue / etc.
+- **`seedExtension`** — applied to the AFTER-side stack only. Use this for entities that exercise the new feature added in this diff. Skip (set to `null`) when the new UI shows up against base-seeded data.
+
+The before / after asymmetry is the point: the visual reviewer compares before-side (no extension) against after-side (with extension) screenshots. If you'd put an entity in both, put it in `baseSeed`. If it's only meaningful when the new code path is mounted, put it in `seedExtension`.
+
+Each seed spec is a `FixtureSpec`:
 
 ```json
 {
