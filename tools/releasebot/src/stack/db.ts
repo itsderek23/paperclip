@@ -1,13 +1,8 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import postgres from "postgres";
-import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import * as schema from "@paperclipai/db";
-
-export type ReleasebotDb = PostgresJsDatabase<typeof schema>;
 
 export interface DbContext {
-  db: ReleasebotDb;
   sql: postgres.Sql;
   close: () => Promise<void>;
 }
@@ -27,7 +22,6 @@ export async function openInstanceDb(args: {
   if (!Number.isInteger(configuredPort) || !configuredPort || configuredPort <= 0) {
     throw new Error(`No embeddedPostgresPort in ${configPath}`);
   }
-  // Resolve canonical (realpath) form so symlinked tmp paths compare equal.
   const expectedDataDir = path.resolve(
     config.database?.embeddedPostgresDataDir ?? path.join(instanceDir, "db"),
   );
@@ -47,8 +41,7 @@ export async function openInstanceDb(args: {
       if (actualDataDir === expectedDataDir) {
         await sql.end({ timeout: 1 });
         const fullSql = postgres(url);
-        const db = drizzle(fullSql, { schema });
-        return { db, sql: fullSql, close: () => fullSql.end({ timeout: 5 }) };
+        return { sql: fullSql, close: () => fullSql.end({ timeout: 5 }) };
       }
       await sql.end({ timeout: 1 });
     } catch (err) {
@@ -60,5 +53,3 @@ export async function openInstanceDb(args: {
     `Could not find embedded postgres for ${args.instanceId} (expected dataDir=${expectedDataDir}, scanned ports ${configuredPort}-${configuredPort + PORT_SCAN_RANGE - 1}). Last error: ${(lastError as Error)?.message ?? "(none)"}`,
   );
 }
-
-export { schema };

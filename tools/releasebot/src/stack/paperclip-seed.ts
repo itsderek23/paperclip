@@ -9,7 +9,6 @@ import type {
   FixtureSummary,
 } from "../types.ts";
 import type { DbContext } from "./db.ts";
-import * as schema from "@paperclipai/db";
 
 export const AVAILABLE_ENDPOINTS = `
 Available write endpoints (local_trusted, no auth required). Use ONLY these — other paths return 404 or require approval flows.
@@ -141,43 +140,43 @@ async function runDrizzleInsertEntity(
     summary[entity.name] = { values: {}, note: "no db context — drizzle-insert entity skipped" };
     return;
   }
-  const tableUnknown = (schema as Record<string, unknown>)[entity.table];
-  if (!tableUnknown) {
-    summary[entity.name] = { values: {}, note: `unknown table: ${entity.table}` };
-    return;
-  }
-  const table = tableUnknown as Record<string, unknown>;
   const interpolated = interpolateObject(entity.values, summary) as
     | Record<string, unknown>
     | Record<string, unknown>[];
-  const coerced = Array.isArray(interpolated)
-    ? interpolated.map((row) => coerceTimestampStrings(row))
-    : coerceTimestampStrings(interpolated);
-  // Build a narrow .returning() projection limited to the columns we'll capture
-  // from. This avoids errors when the booted DB schema lags the workspace
-  // schema (e.g. a newer column exists in @paperclipai/db that the running
-  // worktree's migrated DB doesn't have yet).
+  const rows = (Array.isArray(interpolated) ? interpolated : [interpolated]).map((row) =>
+    coerceTimestampStrings(row as Record<string, unknown>),
+  );
+  if (rows.length === 0) {
+    summary[entity.name] = { values: {}, note: "drizzle-insert entity has no rows" };
+    return;
+  }
+  const cols = Object.keys(rows[0]);
+  if (cols.length === 0) {
+    summary[entity.name] = { values: {}, note: "drizzle-insert entity has no columns" };
+    return;
+  }
   const captureFields = entity.capture
     ? Object.values(entity.capture)
         .map((p) => p.match(/^\$\.(.+)$/)?.[1])
         .filter((f): f is string => !!f)
     : ["id"];
-  const returningProjection: Record<string, unknown> = {};
-  for (const field of captureFields) {
-    if (table[field] !== undefined) returningProjection[field] = table[field];
+  const colList = cols.map(quoteIdent).join(", ");
+  const valuesPlaceholders = rows
+    .map((_, rowIdx) => `(${cols.map((_, colIdx) => `$${rowIdx * cols.length + colIdx + 1}`).join(", ")})`)
+    .join(", ");
+  const params: unknown[] = [];
+  for (const row of rows) {
+    for (const c of cols) params.push(row[c] ?? null);
   }
-  const rows = (await (dbCtx.db as unknown as {
-    insert: (t: unknown) => {
-      values: (v: unknown) => {
-        returning: (p?: Record<string, unknown>) => Promise<Record<string, unknown>[]>;
-      };
-    };
-  })
-    .insert(table)
-    .values(coerced)
-    .returning(Object.keys(returningProjection).length ? returningProjection : undefined)) as Record<string, unknown>[];
-  const first = rows[0] ?? {};
+  const returnList = captureFields.length > 0 ? captureFields.map(quoteIdent).join(", ") : "*";
+  const sqlText = `INSERT INTO ${quoteIdent(entity.table)} (${colList}) VALUES ${valuesPlaceholders} RETURNING ${returnList}`;
+  const result = (await dbCtx.sql.unsafe(sqlText, params as never[])) as unknown as Record<string, unknown>[];
+  const first = result[0] ?? {};
   summary[entity.name] = { values: capture(entity, first) };
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
