@@ -19,4 +19,5 @@ export interface StackAdapter {
   buildSeedSpec?(ctx: SeedContext): Promise<FixtureSpec>;
   seed?(baseUrl: string, spec: FixtureSpec, artifactsDir: string, sideLabel: string): Promise<FixtureSummary>;
   provideAuth?(baseUrl: string, artifactsDir: string, sideLabel: Side): Promise<AuthContext | undefined>;
+  promptHints?(): Promise<string>;
 }

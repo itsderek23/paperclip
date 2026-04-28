@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { BootedStack, SeedContext, StackAdapter } from "./adapter.ts";
 
 export interface PaperclipBootedStack extends BootedStack {
@@ -78,6 +79,18 @@ export class PaperclipAdapter implements StackAdapter {
 
   async seed(baseUrl: string, spec: FixtureSpec, artifactsDir: string, sideLabel: string): Promise<FixtureSummary> {
     return executeFixtureSpec({ baseUrl, spec, artifactsDir, sideLabel });
+  }
+
+  async promptHints(): Promise<string> {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dir = path.join(here, "paperclip-prompt-hints");
+    const files = ["endpoints.md", "routes.md", "selectors.md", "auth.md"];
+    const parts: string[] = [];
+    for (const f of files) {
+      const body = await fs.readFile(path.join(dir, f), "utf8");
+      parts.push(body.trim());
+    }
+    return parts.join("\n\n");
   }
 }
 

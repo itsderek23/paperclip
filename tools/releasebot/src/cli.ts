@@ -10,6 +10,8 @@ import { OpenWebUiAdapter } from "./stack/openwebui.ts";
 import type { StackAdapter } from "./stack/adapter.ts";
 import { generatePlan } from "./plan.ts";
 import { extractSelectors, findUngroundedSelectors } from "./plan-validate.ts";
+import { runPlanHarness } from "./harness/claude-code.ts";
+import { buildPrompt, renderPerPrContext } from "./harness/prompt-loader.ts";
 import { runPlanAgainst } from "./run.ts";
 import { runRepairPass } from "./repair.ts";
 import { reviewRun } from "./review.ts";
@@ -19,6 +21,7 @@ import { gatherDiffContext } from "./diff-context.ts";
 import type { Plan, Side } from "./types.ts";
 
 type StackName = "paperclip" | "caldiy" | "openwebui";
+type PlannerName = "builtin" | "claude-code";
 
 interface Args {
   prNumber: number;
@@ -36,6 +39,7 @@ interface Args {
   noReuse: boolean;
   parallelBoot: boolean;
   stack: StackName;
+  planner: PlannerName;
   repo: string | undefined;
 }
 
@@ -54,7 +58,7 @@ function parseArgs(argv: string[]): Args {
       values.set(a.slice(0, eq), a.slice(eq + 1));
       continue;
     }
-    if (a === "--stack" || a === "--repo") {
+    if (a === "--stack" || a === "--repo" || a === "--planner") {
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
         console.error(`Missing value for ${a}`);
@@ -69,13 +73,18 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--plan-from-cache] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--planner builtin|claude-code] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--plan-from-cache] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
   const stackRaw = values.get("--stack") ?? "paperclip";
   if (stackRaw !== "paperclip" && stackRaw !== "caldiy" && stackRaw !== "openwebui") {
     console.error(`Unknown --stack ${stackRaw}; expected paperclip, caldiy, or openwebui`);
+    process.exit(2);
+  }
+  const plannerRaw = values.get("--planner") ?? "builtin";
+  if (plannerRaw !== "builtin" && plannerRaw !== "claude-code") {
+    console.error(`Unknown --planner ${plannerRaw}; expected builtin or claude-code`);
     process.exit(2);
   }
   return {
@@ -94,6 +103,7 @@ function parseArgs(argv: string[]): Args {
     noReuse: flags.has("--no-reuse"),
     parallelBoot: flags.has("--parallel-boot"),
     stack: stackRaw,
+    planner: plannerRaw,
     repo: values.get("--repo") ?? process.env.RELEASEBOT_REPO,
   };
 }
@@ -236,8 +246,17 @@ async function main(): Promise<void> {
   }
 
   if (args.planOnly) {
-    log("generating plan from diff (no fixtures, --plan-only)...");
-    const plan = await planWithGroundingRetry(pr, diff, { apiKey, sourceContext });
+    log(`generating plan from diff (no fixtures, --plan-only, planner=${args.planner})...`);
+    const { plan } = await runPlanner({
+      planner: args.planner,
+      pr,
+      diff,
+      sourceContext,
+      apiKey,
+      adapter: getAdapter(args.stack),
+      worktreePath: afterWt,
+      artifactsDir,
+    });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
     if (plan.metadata.surface === "none" && !args.forceNoUi) {
@@ -367,14 +386,31 @@ async function main(): Promise<void> {
       if (beforeAuth) log(`  ${beforeAuth.description}`);
     }
 
-    log("generating plan from diff...");
-    const plan = await planWithGroundingRetry(pr, diff, {
+    log(`generating plan from diff (planner=${args.planner})...`);
+    const planResult = await runPlanner({
+      planner: args.planner,
+      pr,
+      diff,
+      sourceContext,
       apiKey,
       fixtures,
-      sourceContext,
       authContext: beforeAuth,
+      adapter,
+      worktreePath: afterWt,
+      artifactsDir,
     });
+    const plan = planResult.plan;
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
+    if (planResult.seedExtension && adapter.seed) {
+      log(`  harness returned seedExtension with ${planResult.seedExtension.entities.length} entities — applying on after-side`);
+      await fs.writeFile(
+        path.join(artifactsDir, "seed-extension.json"),
+        JSON.stringify(planResult.seedExtension, null, 2),
+      );
+      await adapter
+        .seed(afterStack.baseUrl, planResult.seedExtension, artifactsDir, "after")
+        .catch((e) => log(`  seedExtension apply failed: ${(e as Error).message}`));
+    }
     printPlan(plan);
 
     if (plan.metadata.surface === "none" && !args.forceNoUi) {
@@ -709,6 +745,55 @@ async function writePreflightFailureReport(
   lines.push("Re-run with `--force-broken` to attempt the run anyway.");
   lines.push("");
   await fs.writeFile(path.join(artifactsDir, "report.md"), lines.join("\n"));
+}
+
+interface RunPlannerArgs {
+  planner: PlannerName;
+  pr: Parameters<typeof generatePlan>[0];
+  diff: string;
+  sourceContext?: string;
+  apiKey: string;
+  fixtures?: Parameters<typeof generatePlan>[2]["fixtures"];
+  authContext?: Parameters<typeof generatePlan>[2]["authContext"];
+  adapter: StackAdapter;
+  worktreePath: string;
+  artifactsDir: string;
+}
+
+interface RunPlannerResult {
+  plan: Plan;
+  seedExtension: Awaited<ReturnType<typeof runPlanHarness>>["seedExtension"];
+}
+
+async function runPlanner(args: RunPlannerArgs): Promise<RunPlannerResult> {
+  if (args.planner === "claude-code") {
+    return runClaudeCodePlanner(args);
+  }
+  const plan = await planWithGroundingRetry(args.pr, args.diff, {
+    apiKey: args.apiKey,
+    fixtures: args.fixtures,
+    sourceContext: args.sourceContext,
+    authContext: args.authContext,
+  });
+  return { plan, seedExtension: null };
+}
+
+async function runClaudeCodePlanner(args: RunPlannerArgs): Promise<RunPlannerResult> {
+  const adapterHints = args.adapter.promptHints ? await args.adapter.promptHints() : "";
+  const perPrContext = renderPerPrContext({
+    pr: args.pr,
+    diff: args.diff,
+    sourceContext: args.sourceContext,
+    fixtureSummary: args.fixtures,
+  });
+  const systemPrompt = await buildPrompt("plan", { adapterHints, perPrContext });
+  const result = await runPlanHarness({
+    systemPrompt,
+    worktreePath: args.worktreePath,
+    artifactsDir: args.artifactsDir,
+    log,
+  });
+  return { plan: result.plan, seedExtension: result.seedExtension };
 }
 
 async function planWithGroundingRetry(
