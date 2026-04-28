@@ -240,6 +240,15 @@ async function main(): Promise<void> {
     const plan = await planWithGroundingRetry(pr, diff, { apiKey, sourceContext });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
+    if (plan.metadata.surface === "none" && !args.forceNoUi) {
+      log("  planner declared no validatable UI surface");
+      console.error(
+        `releasebot: PR #${args.prNumber} planner concluded no validatable UI surface — ${plan.metadata.rationale}`,
+      );
+      console.error("Re-run with --force-no-ui to execute a plan anyway.");
+      await writeNoUiSurfaceReport(artifactsDir, pr, { plannerRationale: plan.metadata.rationale });
+      process.exit(3);
+    }
     log(`plan written to ${path.join(artifactsDir, "plan.json")}. Exiting (--plan-only).`);
     return;
   }
@@ -367,6 +376,17 @@ async function main(): Promise<void> {
     });
     await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
     printPlan(plan);
+
+    if (plan.metadata.surface === "none" && !args.forceNoUi) {
+      log("  planner declared no validatable UI surface; skipping plan execution");
+      console.error(
+        `releasebot: PR #${args.prNumber} planner concluded no validatable UI surface — ${plan.metadata.rationale}`,
+      );
+      console.error("Re-run with --force-no-ui to execute the plan anyway.");
+      await writeNoUiSurfaceReport(artifactsDir, pr, { plannerRationale: plan.metadata.rationale });
+      process.exitCode = 3;
+      return;
+    }
 
     log("running plan (before)...");
     let beforeResult = await runPlanAgainst(plan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
@@ -745,6 +765,7 @@ function buildGroundingHaystack(sourceContext: string, fixtures: Parameters<type
 async function writeNoUiSurfaceReport(
   artifactsDir: string,
   pr: { number: number; title: string; url: string; baseSha: string; headSha: string },
+  opts: { plannerRationale?: string } = {},
 ): Promise<void> {
   const lines: string[] = [];
   lines.push(`# releasebot — PR #${pr.number}: skipped`);
@@ -753,11 +774,21 @@ async function writeNoUiSurfaceReport(
   lines.push(`${pr.url}  `);
   lines.push(`base: \`${pr.baseSha.slice(0, 7)}\` · head: \`${pr.headSha.slice(0, 7)}\`  `);
   lines.push("");
-  lines.push("## No browsable UI surface in this PR");
-  lines.push("");
-  lines.push(
-    "releasebot found no `.tsx`/`.jsx` changes under `ui/` in this PR. There is no browsable surface a visual QA run could exercise — most likely a backend, infra, docs, or skill-markdown change.",
-  );
+  if (opts.plannerRationale) {
+    lines.push("## No validatable UI surface (planner declared)");
+    lines.push("");
+    lines.push(
+      "After reviewing the diff and source context, the planner concluded there is no substantive UI surface to validate for this PR.",
+    );
+    lines.push("");
+    lines.push(`**Planner rationale:** ${opts.plannerRationale}`);
+  } else {
+    lines.push("## No browsable UI surface in this PR");
+    lines.push("");
+    lines.push(
+      "releasebot found no `.tsx`/`.jsx` changes under `ui/` in this PR. There is no browsable surface a visual QA run could exercise — most likely a backend, infra, docs, or skill-markdown change.",
+    );
+  }
   lines.push("");
   lines.push("Re-run with `--force-no-ui` to attempt the run anyway (the planner will likely scope-drift to incidental UI hunks).");
   lines.push("");

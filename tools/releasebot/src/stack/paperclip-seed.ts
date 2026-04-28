@@ -4,8 +4,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { FixtureSpec, FixtureSpecEntity, FixtureSummary } from "../types.ts";
 
 const MODEL = "claude-opus-4-7";
-const MAX_TEST_FILE_CHARS = 20_000;
-const MAX_TEST_FILES = 8;
+const MAX_TEST_FILE_CHARS = 80_000;
+const MAX_TEST_FILES = 40;
 
 export const AVAILABLE_ENDPOINTS = `
 Available write endpoints (local_trusted, no auth required). Use ONLY these — other paths return 404 or require approval flows.
@@ -155,11 +155,12 @@ async function synthesizeFixtureSpec(args: {
     hintsBlock,
   ].join("\n");
 
-  const resp = await client.messages.create({
+  const resp = await client.beta.messages.create({
     model: MODEL,
     max_tokens: 3000,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userContent }],
+    betas: ["context-1m-2025-08-07"],
   });
   const text = resp.content
     .flatMap((b) => (b.type === "text" ? [b.text] : []))

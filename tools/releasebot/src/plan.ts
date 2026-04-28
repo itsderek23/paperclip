@@ -18,9 +18,10 @@ Output schema (strict, return ONLY this JSON object — no markdown fences, no c
     "steps": [
       { "description": string, "url": string }   // one entry per test() in the spec, in order
     ],
-    "coverageNote": string | null            // see "Coverage gates" rule below
+    "coverageNote": string | null,           // see "Coverage gates" rule below
+    "surface": "ui" | "none"                 // see "Surface declaration" rule below; default "ui". When "none", set steps: [] and spec: ""
   },
-  "spec": string                             // the TypeScript body: one test(...) per step
+  "spec": string                             // the TypeScript body: one test(...) per step. Set to "" when surface is "none"
 }
 
 The spec body is injected into a file that already has these imports and hooks in scope:
@@ -55,6 +56,9 @@ Rules:
 - Number steps starting at 01. The step number in the test name MUST match step-NN in the screenshot filename and its index (NN-1) in metadata.steps.
 - The metadata.steps[].description field is shown to human reviewers in a PR comment. Keep it generic — describe the *kind* of thing being tested, not the specific seeded record. Refer to entities generically ("an issue", "the descendant issue", "a subtask", "the assigned user", "the project"). Do NOT include seeded fixture ids/keys (e.g. "PAP-1", "PAP-6", "REF-2", project codes, user emails) in the description — those are fine in selectors, URLs, and the test name, but not in this user-facing field.
 - Coverage gates: the diff's user-visible UI is sometimes gated on runtime state, live data, or anything the test environment can't synthesize — a scheduled retry pending, an in-progress run, a real third-party callback, a long-running animation mid-frame, an actual user with verified email, etc. When you can identify such a gate AND you've deliberately fallen back to a smoke test (e.g. asserting the component still mounts on a real page, instead of asserting the new copy itself), set metadata.coverageNote to one short user-facing sentence explaining what we couldn't produce — generic, no record names. Examples: "The new retry-state badges only render when an issue has a scheduled retry pending, which fixtures can't produce." / "The new in-progress upload UI only appears mid-upload, which the test can't simulate." Otherwise set coverageNote to null. Do NOT use this field for backend-only PRs with no UI surface (just null), and do NOT use it for ordinary PRs whose UI you can fully exercise.
+- Reachability before targeting. Before you pick a route to navigate to and a locator to assert on, verify in the source context that BOTH of the following hold: (a) the route's rendered output actually includes the changed component or region — i.e. the diff either adds/modifies the route itself, OR adds/modifies a consumer that mounts the changed component on that route. A component file that is edited but whose imports/mount sites are unchanged in this diff will NOT appear at runtime on routes that previously didn't render it. (b) any conditional or runtime gate around the new copy/region (a non-empty collection, an active session, a feature flag, an in-progress operation, an external callback) is satisfied by the fixtures available — otherwise the new affordance won't render and the assertion will fail regardless of the PR's correctness. When (a) fails, drop the target — do not assert on a component the diff never wires up. When (b) fails and there is no fixture path to satisfy the gate, treat it as a coverage gate (use metadata.coverageNote) instead of asserting on it. Prefer routes that are themselves added or modified in this diff, since their entire rendered output is by definition in-scope.
+- Smoke tests must be substantive. A smoke test is acceptable ONLY when you can verify from the source context that the route you target demonstrably mounts the changed component or its consumer chain — i.e. the source context shows the route's component imports the changed file (directly or via a clearly-named consumer) AND the consumer renders unconditionally on first paint for the fixture you're using. Acceptable smoke patterns: (1) "Component mounts on its host route" — assert the changed component's container is visible (not its conditionally-rendered inner content). (2) "Modified or added route smoke" — assert any element from the page's static frame on a route the diff itself adds or modifies. (3) "Renamed/reshaped prop reaches the page" — assert the consumer's container renders on a fixture-seeded page that demonstrably mounts it. (4) "Unconditional new copy" — assert literal new text whose JSX in source context shows no surrounding conditional. Trivial smokes are NOT allowed: never assert generic page chrome (navbar links, app heading, route /) to "prove the app loads." If you cannot establish a mount path from source context for the changed code, do not fall back to a trivial smoke — set metadata.surface = "none" instead (see next rule).
+- Surface declaration. Set metadata.surface = "none" (with metadata.steps = [] and spec = "") when, after reading the full source context, you cannot identify ANY substantive smoke pattern from the list above for this diff. Examples that warrant "none": pure backend / CLI / migration / type refactor with no rendered-output change; UI files modified but only in non-rendered code paths (workers, utils, type re-exports); component files modified but the diff doesn't add or modify any consumer that mounts them on a navigable route in the seeded fixtures. When you set "none", metadata.rationale must briefly explain in one sentence why no surface is validatable. Set metadata.surface = "ui" (or omit) and produce 1–6 steps in every other case. Do NOT use this field as an escape hatch for hard-to-test runtime gates — that's what coverageNote is for.
 - Use Playwright locators + expect, NOT text-substring includes. Prefer \`page.getByRole("button", { name: "..." })\`, \`page.getByLabel("...")\`, \`page.getByTestId("...")\`, \`page.getByText("...")\`.
 - Use ONLY relative URLs on page.goto — baseURL is injected from env.
 - For text the PR introduced that is HIDDEN behind an interaction (menu button, tab, drawer, popover, dialog trigger that must be opened to reveal the new content) — click the trigger FIRST, then assert on the new text. If the new content is already visible on initial page load (a new settings section, a new card on a list page, a new banner, new copy in an existing visible region), do NOT add interaction steps; just navigate and assert.
@@ -173,7 +177,17 @@ function renderFixtures(summary: FixtureSummary): string {
 
 function validate(p: { metadata: PlanMetadata; spec: string }): void {
   if (!p.metadata) throw new Error("Plan missing metadata");
-  if (!Array.isArray(p.metadata.steps) || p.metadata.steps.length === 0) {
+  if (!Array.isArray(p.metadata.steps)) throw new Error("Plan metadata.steps must be an array");
+  if (p.metadata.surface === "none") {
+    if (p.metadata.steps.length !== 0) {
+      throw new Error('Plan declared surface: "none" but metadata.steps is non-empty');
+    }
+    if (!p.metadata.rationale || p.metadata.rationale.trim().length === 0) {
+      throw new Error('Plan declared surface: "none" but rationale is empty');
+    }
+    return;
+  }
+  if (p.metadata.steps.length === 0) {
     throw new Error("Plan metadata has no steps");
   }
   for (const [i, step] of p.metadata.steps.entries()) {
@@ -183,8 +197,6 @@ function validate(p: { metadata: PlanMetadata; spec: string }): void {
   if (typeof p.spec !== "string" || p.spec.trim().length === 0) {
     throw new Error("Plan spec body is empty");
   }
-  // Sanity: spec should contain at least one test(...) call, and the number should
-  // roughly match metadata.steps.length. Accept off-by-one as a soft warning territory.
   const testCount = (p.spec.match(/\btest\(/g) ?? []).length;
   if (testCount === 0) throw new Error("Plan spec contains no test(...) calls");
   if (testCount !== p.metadata.steps.length) {

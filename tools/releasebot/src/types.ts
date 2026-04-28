@@ -24,6 +24,12 @@ export interface PlanMetadata {
    * the cutter comment so reviewers know "screenshots match" doesn't mean
    * "we exercised the change". */
   coverageNote?: string | null;
+  /** Set to "none" when the planner concludes from full source context that the diff has no
+   *  validatable UI surface. Honored by the CLI like the pre-planner --force-no-ui short-circuit:
+   *  the run writes a no-UI-surface report and exits 3 unless --force-no-ui overrides. Default
+   *  is "ui" — omit or set explicitly when there is something to test. When "none", steps must
+   *  be empty and rationale must briefly explain why no surface is validatable. */
+  surface?: "ui" | "none";
 }
 
 export interface Plan {
