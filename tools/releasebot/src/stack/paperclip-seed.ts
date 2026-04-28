@@ -1,7 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import type { FixtureSpec, FixtureSpecEntity, FixtureSummary } from "../types.ts";
+import type {
+  FixtureSpec,
+  FixtureSpecDrizzleInsertEntity,
+  FixtureSpecEntity,
+  FixtureSpecHttpEntity,
+  FixtureSpecSqlEntity,
+  FixtureSummary,
+} from "../types.ts";
+import type { DbContext } from "./db.ts";
+import * as schema from "@paperclipai/db";
 
 const MODEL = "claude-opus-4-7";
 const MAX_TEST_FILE_CHARS = 80_000;
@@ -187,44 +196,143 @@ export async function executeSpec(
   baseUrl: string,
   spec: FixtureSpec,
   initialSummary?: FixtureSummary,
+  dbCtx?: DbContext,
 ): Promise<FixtureSummary> {
   const summary: FixtureSummary = initialSummary ? { ...initialSummary } : {};
   for (const entity of spec.entities) {
     try {
-      const endpoint = interpolate(entity.endpoint, summary);
-      const body = interpolateObject(entity.body, summary);
-      const { method, url } = parseEndpoint(endpoint);
-      const res = await fetch(`${baseUrl}${url}`, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        summary[entity.name] = { values: {}, note: `HTTP ${res.status} from ${method} ${url}: ${(await res.text()).slice(0, 200)}` };
-        continue;
+      const kind = entity.kind ?? "http";
+      if (kind === "http") {
+        await runHttpEntity(baseUrl, entity as FixtureSpecHttpEntity, summary);
+      } else if (kind === "sql") {
+        await runSqlEntity(entity as FixtureSpecSqlEntity, summary, dbCtx);
+      } else if (kind === "drizzle-insert") {
+        await runDrizzleInsertEntity(entity as FixtureSpecDrizzleInsertEntity, summary, dbCtx);
+      } else {
+        summary[entity.name] = { values: {}, note: `unknown kind: ${String(kind)}` };
       }
-      const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      const values = capture(entity, payload);
-      // Also carry through a few body fields the planner LLM needs to write
-      // exact locators against: title/name. Avoids forcing the seed LLM to
-      // remember to capture them, and prevents the planner from hallucinating
-      // titles when writing expect(locator).toHaveText(...) / aria-label matches.
-      const bodyObj = body as Record<string, unknown>;
-      for (const key of ["title", "name"]) {
-        if (!(key in values) && typeof bodyObj[key] === "string") {
-          values[key] = bodyObj[key] as string;
-        }
-      }
-      // Relationship annotations — the planner needs to know which issue blocks
-      // which and which has a parent, so it can pick a URL that actually exercises
-      // the feature under test.
-      const note = formatRelationships(bodyObj, summary);
-      summary[entity.name] = note ? { values, note } : { values };
     } catch (err) {
       summary[entity.name] = { values: {}, note: `error: ${(err as Error).message}` };
     }
   }
   return summary;
+}
+
+async function runHttpEntity(
+  baseUrl: string,
+  entity: FixtureSpecHttpEntity,
+  summary: FixtureSummary,
+): Promise<void> {
+  const endpoint = interpolate(entity.endpoint, summary);
+  const body = interpolateObject(entity.body, summary);
+  const { method, url } = parseEndpoint(endpoint);
+  const res = await fetch(`${baseUrl}${url}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    summary[entity.name] = { values: {}, note: `HTTP ${res.status} from ${method} ${url}: ${(await res.text()).slice(0, 200)}` };
+    return;
+  }
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const values = capture(entity, payload);
+  // Also carry through a few body fields the planner LLM needs to write
+  // exact locators against: title/name. Avoids forcing the seed LLM to
+  // remember to capture them, and prevents the planner from hallucinating
+  // titles when writing expect(locator).toHaveText(...) / aria-label matches.
+  const bodyObj = body as Record<string, unknown>;
+  for (const key of ["title", "name"]) {
+    if (!(key in values) && typeof bodyObj[key] === "string") {
+      values[key] = bodyObj[key] as string;
+    }
+  }
+  // Relationship annotations — the planner needs to know which issue blocks
+  // which and which has a parent, so it can pick a URL that actually exercises
+  // the feature under test.
+  const note = formatRelationships(bodyObj, summary);
+  summary[entity.name] = note ? { values, note } : { values };
+}
+
+async function runSqlEntity(
+  entity: FixtureSpecSqlEntity,
+  summary: FixtureSummary,
+  dbCtx: DbContext | undefined,
+): Promise<void> {
+  if (!dbCtx) {
+    summary[entity.name] = { values: {}, note: "no db context — sql entity skipped" };
+    return;
+  }
+  const query = interpolate(entity.query, summary);
+  const params = (entity.params ?? []).map((p) =>
+    typeof p === "string" ? interpolate(p, summary) : p,
+  );
+  const rows = (await dbCtx.sql.unsafe(query, params as never[])) as unknown as Record<string, unknown>[];
+  const first = rows[0] ?? {};
+  summary[entity.name] = { values: capture(entity, first) };
+}
+
+async function runDrizzleInsertEntity(
+  entity: FixtureSpecDrizzleInsertEntity,
+  summary: FixtureSummary,
+  dbCtx: DbContext | undefined,
+): Promise<void> {
+  if (!dbCtx) {
+    summary[entity.name] = { values: {}, note: "no db context — drizzle-insert entity skipped" };
+    return;
+  }
+  const tableUnknown = (schema as Record<string, unknown>)[entity.table];
+  if (!tableUnknown) {
+    summary[entity.name] = { values: {}, note: `unknown table: ${entity.table}` };
+    return;
+  }
+  const table = tableUnknown as Record<string, unknown>;
+  const interpolated = interpolateObject(entity.values, summary) as
+    | Record<string, unknown>
+    | Record<string, unknown>[];
+  const coerced = Array.isArray(interpolated)
+    ? interpolated.map((row) => coerceTimestampStrings(row))
+    : coerceTimestampStrings(interpolated);
+  // Build a narrow .returning() projection limited to the columns we'll capture
+  // from. This avoids errors when the booted DB schema lags the workspace
+  // schema (e.g. a newer column exists in @paperclipai/db that the running
+  // worktree's migrated DB doesn't have yet).
+  const captureFields = entity.capture
+    ? Object.values(entity.capture)
+        .map((p) => p.match(/^\$\.(.+)$/)?.[1])
+        .filter((f): f is string => !!f)
+    : ["id"];
+  const returningProjection: Record<string, unknown> = {};
+  for (const field of captureFields) {
+    if (table[field] !== undefined) returningProjection[field] = table[field];
+  }
+  const rows = (await (dbCtx.db as unknown as {
+    insert: (t: unknown) => {
+      values: (v: unknown) => {
+        returning: (p?: Record<string, unknown>) => Promise<Record<string, unknown>[]>;
+      };
+    };
+  })
+    .insert(table)
+    .values(coerced)
+    .returning(Object.keys(returningProjection).length ? returningProjection : undefined)) as Record<string, unknown>[];
+  const first = rows[0] ?? {};
+  summary[entity.name] = { values: capture(entity, first) };
+}
+
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+function coerceTimestampStrings(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v === "string" && ISO_TIMESTAMP_RE.test(v)) {
+      const d = new Date(v);
+      out[k] = Number.isNaN(d.getTime()) ? v : d;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }
 
 function parseEndpoint(s: string): { method: string; url: string } {

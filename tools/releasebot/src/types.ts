@@ -123,12 +123,34 @@ export interface RunReview {
   steps: StepReview[];
 }
 
-export interface FixtureSpecEntity {
+export interface FixtureSpecHttpEntity {
+  kind?: "http";
   name: string;
   endpoint: string;
   body: Record<string, unknown>;
   capture?: Record<string, string>;
 }
+
+export interface FixtureSpecSqlEntity {
+  kind: "sql";
+  name: string;
+  query: string;
+  params?: unknown[];
+  capture?: Record<string, string>;
+}
+
+export interface FixtureSpecDrizzleInsertEntity {
+  kind: "drizzle-insert";
+  name: string;
+  table: string;
+  values: Record<string, unknown> | Record<string, unknown>[];
+  capture?: Record<string, string>;
+}
+
+export type FixtureSpecEntity =
+  | FixtureSpecHttpEntity
+  | FixtureSpecSqlEntity
+  | FixtureSpecDrizzleInsertEntity;
 
 export interface FixtureSpec {
   rationale: string;

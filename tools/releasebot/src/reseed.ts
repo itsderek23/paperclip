@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import type { FixtureSpec, FixtureSpecEntity, FixtureSummary } from "./types.ts";
+import type { FixtureSpec, FixtureSpecEntity, FixtureSpecHttpEntity, FixtureSummary } from "./types.ts";
 import { AVAILABLE_ENDPOINTS, executeSpec } from "./stack/paperclip-seed.ts";
 
 const MODEL = "claude-opus-4-7";
@@ -36,7 +36,7 @@ Rules:
 
 export interface ReviseResult {
   rationale: string;
-  extensionEntities: FixtureSpecEntity[];
+  extensionEntities: FixtureSpecHttpEntity[];
 }
 
 export async function reviseSeedFromFailure(args: {
@@ -70,7 +70,11 @@ export async function reviseSeedFromFailure(args: {
 
   const existingFixturesBlock = renderFixturesSummary(existingFixtures);
   const originalEntitiesBlock = originalSpec.entities
-    .map((e) => `  - ${e.name}: ${e.endpoint} body=${JSON.stringify(e.body)}`)
+    .map((e) => {
+      if ((e.kind ?? "http") !== "http") return `  - ${e.name}: (${e.kind})`;
+      const http = e as FixtureSpecHttpEntity;
+      return `  - ${http.name}: ${http.endpoint} body=${JSON.stringify(http.body)}`;
+    })
     .join("\n");
 
   const userContent = [

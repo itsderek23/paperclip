@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import type { BootedStack, SeedContext, StackAdapter } from "./adapter.ts";
+
+export interface PaperclipBootedStack extends BootedStack {
+  paperclipHome: string;
+  instanceId: string;
+}
 import type { FixtureSpec, FixtureSummary } from "../types.ts";
 import { executeFixtureSpec, synthesizeFixtureSpecFromPr } from "./paperclip-seed.ts";
 import { pnpmInstall } from "../worktree.ts";
@@ -15,7 +20,7 @@ export class PaperclipAdapter implements StackAdapter {
     await pnpmInstall(worktree);
   }
 
-  async boot(worktree: string, port: number, homeDir: string): Promise<BootedStack> {
+  async boot(worktree: string, port: number, homeDir: string): Promise<PaperclipBootedStack> {
     // Wipe any stale state from a prior run — partial PG init leaves the data
     // dir non-empty and blocks a fresh boot with "data directory might already exist".
     await fs.rm(homeDir, { recursive: true, force: true });
@@ -24,11 +29,12 @@ export class PaperclipAdapter implements StackAdapter {
     await fs.writeFile(logPath, "");
     const logStream = createWriteStream(logPath, { flags: "a" });
     await new Promise<void>((resolve) => logStream.once("open", () => resolve()));
+    const instanceId = `releasebot-${port}`;
     const env = {
       ...process.env,
       PORT: String(port),
       PAPERCLIP_HOME: homeDir,
-      PAPERCLIP_INSTANCE_ID: `releasebot-${port}`,
+      PAPERCLIP_INSTANCE_ID: instanceId,
       PAPERCLIP_BIND: "loopback",
       PAPERCLIP_DEPLOYMENT_MODE: "local_trusted",
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private",
@@ -54,6 +60,8 @@ export class PaperclipAdapter implements StackAdapter {
 
     return {
       baseUrl,
+      paperclipHome: homeDir,
+      instanceId,
       pid: proc.pid,
       shutdown: () => shutdownProc(proc),
     };
