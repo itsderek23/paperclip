@@ -10,7 +10,8 @@ export interface PaperclipBootedStack extends BootedStack {
   instanceId: string;
 }
 import type { FixtureSpec, FixtureSummary } from "../types.ts";
-import { executeFixtureSpec, synthesizeFixtureSpecFromPr } from "./paperclip-seed.ts";
+import { executeFixtureSpec } from "./paperclip-seed.ts";
+import { synthesizeFixtureSpecFromPr } from "./paperclip-seed-llm.ts";
 import { pnpmInstall } from "../worktree.ts";
 
 const HEALTH_TIMEOUT_MS = 180_000;
