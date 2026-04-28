@@ -3,8 +3,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { BBox, Plan, Side, SideResult, StepResult } from "./types.ts";
-import { stepScreenshotName } from "./plan.ts";
 import { writeGeneratedSpec } from "./spec-generator.ts";
+
+export function stepScreenshotName(stepNumber: number): string {
+  return `step-${String(stepNumber).padStart(2, "0")}.png`;
+}
 
 export async function runPlanAgainst(
   plan: Plan,

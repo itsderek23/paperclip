@@ -3,16 +3,15 @@ import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BootedStack, SeedContext, StackAdapter } from "./adapter.ts";
+import type { BootedStack, StackAdapter } from "./adapter.ts";
+import type { FixtureSpec, FixtureSummary } from "../types.ts";
+import { executeFixtureSpec } from "./paperclip-seed.ts";
+import { pnpmInstall } from "../worktree.ts";
 
 export interface PaperclipBootedStack extends BootedStack {
   paperclipHome: string;
   instanceId: string;
 }
-import type { FixtureSpec, FixtureSummary } from "../types.ts";
-import { executeFixtureSpec } from "./paperclip-seed.ts";
-import { synthesizeFixtureSpecFromPr } from "./paperclip-seed-llm.ts";
-import { pnpmInstall } from "../worktree.ts";
 
 const HEALTH_TIMEOUT_MS = 180_000;
 const HEALTH_POLL_MS = 1_500;
@@ -67,15 +66,6 @@ export class PaperclipAdapter implements StackAdapter {
       pid: proc.pid,
       shutdown: () => shutdownProc(proc),
     };
-  }
-
-  async buildSeedSpec(ctx: SeedContext): Promise<FixtureSpec> {
-    return synthesizeFixtureSpecFromPr({
-      diff: ctx.diff,
-      worktreePath: ctx.worktreePath,
-      apiKey: ctx.apiKey,
-      artifactsDir: ctx.artifactsDir,
-    });
   }
 
   async seed(

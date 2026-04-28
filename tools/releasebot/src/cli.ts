@@ -8,20 +8,16 @@ import { PaperclipAdapter } from "./stack/paperclip.ts";
 import { CalDiyAdapter } from "./stack/caldiy.ts";
 import { OpenWebUiAdapter } from "./stack/openwebui.ts";
 import type { StackAdapter } from "./stack/adapter.ts";
-import { generatePlan } from "./plan.ts";
-import { extractSelectors, findUngroundedSelectors } from "./plan-validate.ts";
 import { runPlanHarness } from "./harness/claude-code.ts";
 import { buildPrompt, renderPerPrContext } from "./harness/prompt-loader.ts";
 import { runPlanAgainst } from "./run.ts";
-import { runRepairPass } from "./repair.ts";
 import { reviewRun } from "./review.ts";
 import { writeReport } from "./report.ts";
 import { annotateRun } from "./annotate.ts";
 import { gatherDiffContext } from "./diff-context.ts";
-import type { FixtureSummary, Plan, Side } from "./types.ts";
+import type { FixtureSummary, Plan, PrMeta, Side } from "./types.ts";
 
 type StackName = "paperclip" | "caldiy" | "openwebui";
-type PlannerName = "builtin" | "claude-code";
 
 interface Args {
   prNumber: number;
@@ -33,13 +29,11 @@ interface Args {
   reviewOnly: boolean;
   annotateOnly: boolean;
   rePrompt: boolean;
-  planFromCache: boolean;
   forceBroken: boolean;
   forceNoUi: boolean;
   noReuse: boolean;
   parallelBoot: boolean;
   stack: StackName;
-  planner: PlannerName;
   repo: string | undefined;
 }
 
@@ -58,7 +52,7 @@ function parseArgs(argv: string[]): Args {
       values.set(a.slice(0, eq), a.slice(eq + 1));
       continue;
     }
-    if (a === "--stack" || a === "--repo" || a === "--planner") {
+    if (a === "--stack" || a === "--repo") {
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
         console.error(`Missing value for ${a}`);
@@ -73,18 +67,13 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--planner builtin|claude-code] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--plan-from-cache] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
   const stackRaw = values.get("--stack") ?? "paperclip";
   if (stackRaw !== "paperclip" && stackRaw !== "caldiy" && stackRaw !== "openwebui") {
     console.error(`Unknown --stack ${stackRaw}; expected paperclip, caldiy, or openwebui`);
-    process.exit(2);
-  }
-  const plannerRaw = values.get("--planner") ?? "builtin";
-  if (plannerRaw !== "builtin" && plannerRaw !== "claude-code") {
-    console.error(`Unknown --planner ${plannerRaw}; expected builtin or claude-code`);
     process.exit(2);
   }
   return {
@@ -97,13 +86,11 @@ function parseArgs(argv: string[]): Args {
     reviewOnly: flags.has("--review-only"),
     annotateOnly: flags.has("--annotate-only"),
     rePrompt: flags.has("--re-prompt"),
-    planFromCache: flags.has("--plan-from-cache"),
     forceBroken: flags.has("--force-broken"),
     forceNoUi: flags.has("--force-no-ui"),
     noReuse: flags.has("--no-reuse"),
     parallelBoot: flags.has("--parallel-boot"),
     stack: stackRaw,
-    planner: plannerRaw,
     repo: values.get("--repo") ?? process.env.RELEASEBOT_REPO,
   };
 }
@@ -153,11 +140,6 @@ async function main(): Promise<void> {
 
   if (args.annotateOnly) {
     await reannotateFromCache(artifactsDir, apiKey, { forceReprompt: args.rePrompt });
-    return;
-  }
-
-  if (args.planFromCache) {
-    await replanFromCache(artifactsDir, apiKey);
     return;
   }
 
@@ -246,13 +228,11 @@ async function main(): Promise<void> {
   }
 
   if (args.planOnly) {
-    log(`generating plan from diff (no fixtures, --plan-only, planner=${args.planner})...`);
-    const { plan } = await runPlanner({
-      planner: args.planner,
+    log("generating plan from diff (no fixtures, --plan-only)...");
+    const { plan } = await runClaudeCodePlanner({
       pr,
       diff,
       sourceContext,
-      apiKey,
       adapter: getAdapter(args.stack),
       worktreePath: afterWt,
       artifactsDir,
@@ -343,28 +323,6 @@ async function main(): Promise<void> {
 
   try {
     let fixtures: Awaited<ReturnType<NonNullable<typeof adapter.seed>>> | undefined;
-    if (args.planner === "builtin" && adapter.buildSeedSpec && adapter.seed) {
-      log("building seed spec (reading adjacent tests + synthesizing via LLM)...");
-      const spec = await adapter
-        .buildSeedSpec({ diff, apiKey, artifactsDir, worktreePath: afterWt })
-        .catch((e) => {
-          log(`  seed spec generation failed: ${(e as Error).message}`);
-          return undefined;
-        });
-      if (spec) {
-        log(`  spec has ${spec.entities.length} entities — executing on both sides`);
-        const beforeFixtures = await adapter
-          .seed(beforeStack.baseUrl, spec, artifactsDir, "before")
-          .catch((e) => {
-            log(`  before seed failed: ${(e as Error).message}`);
-            return undefined;
-          });
-        await adapter
-          .seed(afterStack.baseUrl, spec, artifactsDir, "after")
-          .catch((e) => log(`  after seed failed: ${(e as Error).message}`));
-        fixtures = beforeFixtures;
-      }
-    }
 
     let beforeAuth: Awaited<ReturnType<NonNullable<typeof adapter.provideAuth>>> | undefined;
     let afterAuth: Awaited<ReturnType<NonNullable<typeof adapter.provideAuth>>> | undefined;
@@ -386,15 +344,11 @@ async function main(): Promise<void> {
       if (beforeAuth) log(`  ${beforeAuth.description}`);
     }
 
-    log(`generating plan from diff (planner=${args.planner})...`);
-    const planResult = await runPlanner({
-      planner: args.planner,
+    log("generating plan from diff via claude-code harness...");
+    const planResult = await runClaudeCodePlanner({
       pr,
       diff,
       sourceContext,
-      apiKey,
-      fixtures,
-      authContext: beforeAuth,
       adapter,
       worktreePath: afterWt,
       artifactsDir,
@@ -452,24 +406,9 @@ async function main(): Promise<void> {
     const beforePlan = interpolatePlan(plan, beforeFixtures ?? fixtures);
     const afterPlan = interpolatePlan(plan, afterFixtures ?? beforeFixtures ?? fixtures);
     log("running plan (before)...");
-    let beforeResult = await runPlanAgainst(beforePlan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
+    const beforeResult = await runPlanAgainst(beforePlan, beforeStack.baseUrl, "before", artifactsDir, beforeAuth?.storageStatePath);
     log("running plan (after)...");
-    let afterResult = await runPlanAgainst(afterPlan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
-
-    const needsRepair = afterResult.steps.some((s) => s.status === "fail");
-    if (needsRepair) {
-      log("repair pass: rewriting failing after-side steps from rendered DOM...");
-      const repaired = await runRepairPass({
-        plan,
-        before: beforeResult,
-        after: afterResult,
-        artifactsDir,
-        apiKey,
-        beforeBaseUrl: beforeStack.baseUrl,
-      });
-      afterResult = repaired.after;
-      beforeResult = repaired.before;
-    }
+    const afterResult = await runPlanAgainst(afterPlan, afterStack.baseUrl, "after", artifactsDir, afterAuth?.storageStatePath);
 
     log("visual review...");
     const review = await reviewRun(pr, plan, beforeResult, afterResult, { apiKey });
@@ -677,25 +616,6 @@ async function reannotateFromCache(
   log(`  preview:  ${previewPath}`);
 }
 
-async function replanFromCache(artifactsDir: string, apiKey: string): Promise<void> {
-  log("re-running plan from cached artifacts (no stacks, no Playwright)...");
-  const pr = JSON.parse(await fs.readFile(path.join(artifactsDir, "pr.json"), "utf8")) as Parameters<
-    typeof generatePlan
-  >[0];
-  const diff = await fs.readFile(path.join(artifactsDir, "diff.patch"), "utf8");
-  const sourceContext = await fs
-    .readFile(path.join(artifactsDir, "source-context.txt"), "utf8")
-    .catch(() => undefined);
-  const fixtures = await fs
-    .readFile(path.join(artifactsDir, "fixtures.before.json"), "utf8")
-    .then((raw) => JSON.parse(raw) as Parameters<typeof generatePlan>[2]["fixtures"])
-    .catch(() => undefined);
-  const plan = await planWithGroundingRetry(pr, diff, { apiKey, sourceContext, fixtures });
-  await fs.writeFile(path.join(artifactsDir, "plan.json"), JSON.stringify(plan, null, 2));
-  printPlan(plan);
-  log(`plan written to ${path.join(artifactsDir, "plan.json")}`);
-}
-
 async function dirSizeMb(dir: string): Promise<number> {
   let total = 0;
   async function walk(p: string): Promise<void> {
@@ -791,45 +711,27 @@ function interpolatePlan(plan: Plan, fixtures: FixtureSummary | undefined): Plan
   };
 }
 
-interface RunPlannerArgs {
-  planner: PlannerName;
-  pr: Parameters<typeof generatePlan>[0];
+interface RunClaudeCodePlannerArgs {
+  pr: PrMeta;
   diff: string;
   sourceContext?: string;
-  apiKey: string;
-  fixtures?: Parameters<typeof generatePlan>[2]["fixtures"];
-  authContext?: Parameters<typeof generatePlan>[2]["authContext"];
   adapter: StackAdapter;
   worktreePath: string;
   artifactsDir: string;
 }
 
-interface RunPlannerResult {
+interface RunClaudeCodePlannerResult {
   plan: Plan;
   baseSeed: Awaited<ReturnType<typeof runPlanHarness>>["baseSeed"];
   seedExtension: Awaited<ReturnType<typeof runPlanHarness>>["seedExtension"];
 }
 
-async function runPlanner(args: RunPlannerArgs): Promise<RunPlannerResult> {
-  if (args.planner === "claude-code") {
-    return runClaudeCodePlanner(args);
-  }
-  const plan = await planWithGroundingRetry(args.pr, args.diff, {
-    apiKey: args.apiKey,
-    fixtures: args.fixtures,
-    sourceContext: args.sourceContext,
-    authContext: args.authContext,
-  });
-  return { plan, baseSeed: null, seedExtension: null };
-}
-
-async function runClaudeCodePlanner(args: RunPlannerArgs): Promise<RunPlannerResult> {
+async function runClaudeCodePlanner(args: RunClaudeCodePlannerArgs): Promise<RunClaudeCodePlannerResult> {
   const adapterHints = args.adapter.promptHints ? await args.adapter.promptHints() : "";
   const perPrContext = renderPerPrContext({
     pr: args.pr,
     diff: args.diff,
     sourceContext: args.sourceContext,
-    fixtureSummary: args.fixtures,
   });
   const systemPrompt = await buildPrompt("plan", { adapterHints, perPrContext });
   const result = await runPlanHarness({
@@ -839,57 +741,6 @@ async function runClaudeCodePlanner(args: RunPlannerArgs): Promise<RunPlannerRes
     log,
   });
   return { plan: result.plan, baseSeed: result.baseSeed, seedExtension: result.seedExtension };
-}
-
-async function planWithGroundingRetry(
-  pr: Parameters<typeof generatePlan>[0],
-  diff: string,
-  options: Parameters<typeof generatePlan>[2],
-): Promise<Plan> {
-  const plan = await generatePlan(pr, diff, options);
-  if (!options.sourceContext) return plan;
-
-  const haystack = buildGroundingHaystack(options.sourceContext, options.fixtures);
-  const selectors = extractSelectors(plan.spec);
-  const ungrounded = findUngroundedSelectors(selectors, haystack);
-  if (ungrounded.length === 0) return plan;
-
-  log(`  ⚠ ${ungrounded.length} ungrounded selector(s) in plan: ${ungrounded.map((s) => JSON.stringify(s)).join(", ")}`);
-  log("  retrying plan generation with selector feedback...");
-  let retried: Plan;
-  try {
-    retried = await generatePlan(pr, diff, { ...options, retryFeedback: ungrounded });
-  } catch (err) {
-    log(`  ⚠ retry failed (${(err as Error).message}); falling back to original plan.`);
-    return plan;
-  }
-  if (retried.metadata.steps.length === 0) {
-    log("  ⚠ retry produced an empty plan; falling back to original plan.");
-    return plan;
-  }
-  const stillUngrounded = findUngroundedSelectors(extractSelectors(retried.spec), haystack);
-  if (stillUngrounded.length === 0) {
-    log("  retry succeeded — all selectors are grounded.");
-    return retried;
-  }
-  log(
-    `  ⚠ retry still has ${stillUngrounded.length} ungrounded selector(s): ${stillUngrounded
-      .map((s) => JSON.stringify(s))
-      .join(", ")}. Proceeding; the visual review will mark steps inconclusive if Playwright cannot find them.`,
-  );
-  return retried;
-}
-
-function buildGroundingHaystack(sourceContext: string, fixtures: Parameters<typeof generatePlan>[2]["fixtures"]): string {
-  if (!fixtures) return sourceContext;
-  const fixtureValues: string[] = [];
-  for (const entry of Object.values(fixtures)) {
-    for (const v of Object.values(entry.values)) {
-      if (typeof v === "string") fixtureValues.push(v);
-      else fixtureValues.push(JSON.stringify(v));
-    }
-  }
-  return sourceContext + "\n" + fixtureValues.join("\n");
 }
 
 async function writeNoUiSurfaceReport(
