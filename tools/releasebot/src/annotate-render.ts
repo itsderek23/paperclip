@@ -158,6 +158,37 @@ function renderPinCard(box: BBox, layout: PinCardLayout, caption: string, idx: n
   ].join("");
 }
 
+export async function renderPinCardOverlay(
+  rawPath: string,
+  regions: Region[],
+  fullOutPath: string,
+  W: number,
+  H: number,
+): Promise<void> {
+  if (regions.length === 0) {
+    await fs.writeFile(fullOutPath, await sharp(rawPath).toBuffer());
+    return;
+  }
+  const layouts = layoutPinCards(regions, W, H);
+  const cards = regions.map((r, i) => renderPinCard(r.bbox, layouts[i], r.caption, i, 0, 0)).join("");
+  const boxes = regions
+    .map(
+      (r) =>
+        `<rect x="${r.bbox.x}" y="${r.bbox.y}" width="${r.bbox.width}" height="${r.bbox.height}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-opacity="0.85" rx="3"/>`,
+    )
+    .join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
+    ${shadowFilterDef()}
+    ${boxes}
+    ${cards}
+  </svg>`;
+  const buffer = await sharp(rawPath)
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .png()
+    .toBuffer();
+  await fs.writeFile(fullOutPath, buffer);
+}
+
 export async function renderPinCardSpotlightCropped(
   rawPath: string,
   regions: Region[],
