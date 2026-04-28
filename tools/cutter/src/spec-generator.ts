@@ -37,7 +37,7 @@ function renderSpec(body: string, annotateImport: string): string {
 import { writeFile } from "node:fs/promises";
 import { annotate, markAnnotations, readMarkedAnnotations } from "${annotateImport}";
 
-const SCREENSHOT_DIR = process.env.RELEASEBOT_SCREENSHOT_DIR ?? ".";
+const SCREENSHOT_DIR = process.env.CUTTER_SCREENSHOT_DIR ?? ".";
 
 test.afterEach(async ({ page }, testInfo) => {
   const m = testInfo.title.match(/step-(\\d+)/);
@@ -99,8 +99,8 @@ export default defineConfig({
   timeout: 60_000,
   reporter: [["json", { outputFile: "results.json" }], ["list"]],
   use: {
-    baseURL: process.env.RELEASEBOT_BASE_URL,
-    storageState: process.env.RELEASEBOT_STORAGE_STATE || undefined,
+    baseURL: process.env.CUTTER_BASE_URL,
+    storageState: process.env.CUTTER_STORAGE_STATE || undefined,
     viewport: { width: 1440, height: 900 },
     trace: "on",
     video: "on",
@@ -108,7 +108,7 @@ export default defineConfig({
   },
   fullyParallel: false,
   workers: 1,
-  outputDir: process.env.RELEASEBOT_RUN_OUTPUT ?? "./test-output",
+  outputDir: process.env.CUTTER_RUN_OUTPUT ?? "./test-output",
 });
 `;
 }

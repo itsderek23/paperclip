@@ -56,7 +56,7 @@ function renderMarkdown(args: {
 }): string {
   const { pr, plan, before, after, review } = args;
   const lines: string[] = [];
-  lines.push(`# releasebot — PR #${pr.number}`);
+  lines.push(`# cutter — PR #${pr.number}`);
   lines.push("");
   lines.push(`**${pr.title}**  `);
   lines.push(`${pr.url}  `);
@@ -181,7 +181,7 @@ async function renderHtml(args: {
 
   return `<!doctype html>
 <html><head><meta charset="utf-8"/>
-<title>releasebot · PR #${pr.number}</title>
+<title>cutter · PR #${pr.number}</title>
 <style>
   :root { color-scheme: light dark; }
   body { font: 14px/1.5 -apple-system, system-ui, sans-serif; max-width: 1400px; margin: 2rem auto; padding: 0 1rem; }

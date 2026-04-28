@@ -31,11 +31,11 @@ export async function runPlanAgainst(
   });
 
   const env: Record<string, string> = {
-    RELEASEBOT_BASE_URL: baseUrl,
-    RELEASEBOT_SCREENSHOT_DIR: screenshotDir,
-    RELEASEBOT_RUN_OUTPUT: testOutputDir,
+    CUTTER_BASE_URL: baseUrl,
+    CUTTER_SCREENSHOT_DIR: screenshotDir,
+    CUTTER_RUN_OUTPUT: testOutputDir,
   };
-  if (storageStatePath) env.RELEASEBOT_STORAGE_STATE = storageStatePath;
+  if (storageStatePath) env.CUTTER_STORAGE_STATE = storageStatePath;
   await runPlaywright({ configPath, cwd: generatedDir, env });
 
   const steps = await parseResults(
@@ -52,7 +52,6 @@ export async function runPlanAgainst(
 }
 
 function resolveAnnotateHelperPath(): string {
-  // tools/releasebot/src/run.ts → tools/releasebot/src/runtime/annotate.ts
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.join(here, "runtime", "annotate.ts");
 }
@@ -62,15 +61,13 @@ async function runPlaywright(opts: {
   cwd: string;
   env: Record<string, string>;
 }): Promise<void> {
-  // Resolve the Playwright test runner CLI inside the tool's own node_modules,
-  // regardless of where the CLI is invoked from. Avoids relying on PATH.
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const releasebotNodeModules = path.resolve(here, "..", "node_modules");
-  const playwrightCli = path.join(releasebotNodeModules, "@playwright", "test", "cli.js");
+  const cutterNodeModules = path.resolve(here, "..", "node_modules");
+  const playwrightCli = path.join(cutterNodeModules, "@playwright", "test", "cli.js");
   const existingNodePath = process.env.NODE_PATH ?? "";
   const nodePath = existingNodePath
-    ? `${releasebotNodeModules}${path.delimiter}${existingNodePath}`
-    : releasebotNodeModules;
+    ? `${cutterNodeModules}${path.delimiter}${existingNodePath}`
+    : cutterNodeModules;
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       process.execPath,

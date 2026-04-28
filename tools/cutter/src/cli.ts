@@ -67,7 +67,7 @@ function parseArgs(argv: string[]): Args {
   const prNumber = Number(positional[0]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     console.error(
-      "Usage: pnpm releasebot:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--force-broken] [--force-no-ui]",
+      "Usage: pnpm cutter:pr <PR_NUMBER> [--stack paperclip|caldiy|openwebui] [--repo <path>] [--skip-install] [--keep-stacks] [--no-reuse] [--parallel-boot] [--plan-only] [--clean] [--report-only] [--review-only] [--annotate-only] [--re-prompt] [--force-broken] [--force-no-ui]",
     );
     process.exit(2);
   }
@@ -91,7 +91,7 @@ function parseArgs(argv: string[]): Args {
     noReuse: flags.has("--no-reuse"),
     parallelBoot: flags.has("--parallel-boot"),
     stack: stackRaw,
-    repo: values.get("--repo") ?? process.env.RELEASEBOT_REPO,
+    repo: values.get("--repo") ?? process.env.CUTTER_REPO,
   };
 }
 
@@ -126,7 +126,7 @@ async function main(): Promise<void> {
   const artifactsDir = path.join(prDir, "artifacts");
   await fs.mkdir(artifactsDir, { recursive: true });
 
-  log(`releasebot · PR #${args.prNumber}`);
+  log(`cutter · PR #${args.prNumber}`);
 
   if (args.reportOnly) {
     await regenerateReport(artifactsDir);
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
       log(`  ⚠ upstream issues: ${bits.join("; ")}`);
       if (!args.forceBroken) {
         console.error(
-          `releasebot: PR #${args.prNumber} has ${bits.join(" and ")}; the after-side stack is likely to fail to build.`,
+          `cutter: PR #${args.prNumber} has ${bits.join(" and ")}; the after-side stack is likely to fail to build.`,
         );
         console.error("Re-run with --force-broken to proceed anyway.");
         await writePreflightFailureReport(artifactsDir, pr, ci);
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   } else {
     log("  no UI-relevant hunks found");
     console.error(
-      `releasebot: PR #${args.prNumber} has no UI-relevant hunks (no .tsx/.jsx changes under ui/).`,
+      `cutter: PR #${args.prNumber} has no UI-relevant hunks (no .tsx/.jsx changes under ui/).`,
     );
     console.error("There is no browsable surface to QA. Re-run with --force-no-ui to proceed anyway.");
     await writeNoUiSurfaceReport(artifactsDir, pr);
@@ -242,7 +242,7 @@ async function main(): Promise<void> {
     if (plan.metadata.surface === "none" && !args.forceNoUi) {
       log("  planner declared no validatable UI surface");
       console.error(
-        `releasebot: PR #${args.prNumber} planner concluded no validatable UI surface — ${plan.metadata.rationale}`,
+        `cutter: PR #${args.prNumber} planner concluded no validatable UI surface — ${plan.metadata.rationale}`,
       );
       console.error("Re-run with --force-no-ui to execute a plan anyway.");
       await writeNoUiSurfaceReport(artifactsDir, pr, { plannerRationale: plan.metadata.rationale });
@@ -395,7 +395,7 @@ async function main(): Promise<void> {
     if (plan.metadata.surface === "none" && !args.forceNoUi) {
       log("  planner declared no validatable UI surface; skipping plan execution");
       console.error(
-        `releasebot: PR #${args.prNumber} planner concluded no validatable UI surface — ${plan.metadata.rationale}`,
+        `cutter: PR #${args.prNumber} planner concluded no validatable UI surface — ${plan.metadata.rationale}`,
       );
       console.error("Re-run with --force-no-ui to execute the plan anyway.");
       await writeNoUiSurfaceReport(artifactsDir, pr, { plannerRationale: plan.metadata.rationale });
@@ -672,7 +672,7 @@ async function writePreflightFailureReport(
   ci: { mergeable: string; failingChecks: { name: string; detailsUrl: string }[] },
 ): Promise<void> {
   const lines: string[] = [];
-  lines.push(`# releasebot — PR #${pr.number}: skipped`);
+  lines.push(`# cutter — PR #${pr.number}: skipped`);
   lines.push("");
   lines.push(`**${pr.title}**  `);
   lines.push(`${pr.url}  `);
@@ -680,7 +680,7 @@ async function writePreflightFailureReport(
   lines.push("");
   lines.push("## Preflight skipped this run");
   lines.push("");
-  lines.push("releasebot did not build or execute this PR because upstream CI shows it is not in a buildable state.");
+  lines.push("cutter did not build or execute this PR because upstream CI shows it is not in a buildable state.");
   lines.push("");
   if (ci.mergeable === "CONFLICTING") {
     lines.push("- Merge conflicts with the base branch.");
@@ -749,7 +749,7 @@ async function writeNoUiSurfaceReport(
   opts: { plannerRationale?: string } = {},
 ): Promise<void> {
   const lines: string[] = [];
-  lines.push(`# releasebot — PR #${pr.number}: skipped`);
+  lines.push(`# cutter — PR #${pr.number}: skipped`);
   lines.push("");
   lines.push(`**${pr.title}**  `);
   lines.push(`${pr.url}  `);
@@ -767,7 +767,7 @@ async function writeNoUiSurfaceReport(
     lines.push("## No browsable UI surface in this PR");
     lines.push("");
     lines.push(
-      "releasebot found no `.tsx`/`.jsx` changes under `ui/` in this PR. There is no browsable surface a visual QA run could exercise — most likely a backend, infra, docs, or skill-markdown change.",
+      "cutter found no `.tsx`/`.jsx` changes under `ui/` in this PR. There is no browsable surface a visual QA run could exercise — most likely a backend, infra, docs, or skill-markdown change.",
     );
   }
   lines.push("");
@@ -792,7 +792,7 @@ async function writeBootFailureReport(
     tail = "(boot log not available)";
   }
   const lines: string[] = [];
-  lines.push(`# releasebot — PR #${pr.number}: stack boot failed (${side})`);
+  lines.push(`# cutter — PR #${pr.number}: stack boot failed (${side})`);
   lines.push("");
   lines.push(`**${pr.title}**  `);
   lines.push(`${pr.url}  `);
@@ -814,6 +814,6 @@ async function writeBootFailureReport(
 }
 
 main().catch((err) => {
-  console.error("releasebot failed:", err instanceof Error ? err.stack ?? err.message : err);
+  console.error("cutter failed:", err instanceof Error ? err.stack ?? err.message : err);
   process.exit(1);
 });

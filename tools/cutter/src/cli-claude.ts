@@ -31,7 +31,7 @@ function interpolatePlan(plan: Plan, fixtures: FixtureSummary): Plan {
 async function main() {
   const prNumber = Number(process.argv[2]);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    console.error("Usage: tsx tools/releasebot/src/cli-claude.ts <PR_NUMBER>");
+    console.error("Usage: tsx tools/cutter/src/cli-claude.ts <PR_NUMBER>");
     process.exit(2);
   }
   const apiKey = process.env.ANTHROPIC_API_KEY;

@@ -327,7 +327,7 @@ async function main() {
     process.exit(2);
   }
 
-  // src dir → tools/releasebot → tools → repo root
+  // src dir → tools/cutter → tools → repo root
   const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
   const prDir = path.join(repoRoot, "tmp", "releasebot", String(PR));
   const artifactsDir = path.join(prDir, "artifacts");

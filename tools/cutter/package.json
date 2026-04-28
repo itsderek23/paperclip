@@ -1,10 +1,10 @@
 {
-  "name": "@paperclipai/releasebot",
+  "name": "@paperclipai/cutter",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "releasebot": "./src/cli.ts"
+    "cutter": "./src/cli.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

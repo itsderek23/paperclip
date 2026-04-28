@@ -30,7 +30,7 @@ export class PaperclipAdapter implements StackAdapter {
     await fs.writeFile(logPath, "");
     const logStream = createWriteStream(logPath, { flags: "a" });
     await new Promise<void>((resolve) => logStream.once("open", () => resolve()));
-    const instanceId = `releasebot-${port}`;
+    const instanceId = `cutter-${port}`;
     const env = {
       ...process.env,
       PORT: String(port),

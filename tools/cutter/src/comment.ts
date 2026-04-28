@@ -3,12 +3,12 @@ import path from "node:path";
 import { annotatedFullScreenshotPath, annotatedScreenshotPath } from "./annotate.ts";
 import type { Plan, PrMeta, RunReview, SideResult } from "./types.ts";
 
-const MARKER = "<!-- releasebot:comment-marker v1 -->";
+const MARKER = "<!-- cutter:comment-marker v1 -->";
 
 /**
- * Builds the markdown body of the GitHub PR comment releasebot would post.
+ * Builds the markdown body of the GitHub PR comment cutter would post.
  *
- * Single source of truth for "what releasebot would say" — the preview HTML
+ * Single source of truth for "what cutter would say" — the preview HTML
  * and the future comment-poster service both consume this output.
  *
  * Image references are repo-relative paths under `artifactsDir` (e.g.

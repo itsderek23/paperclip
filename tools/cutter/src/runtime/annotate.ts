@@ -2,7 +2,7 @@ import { test, type Page } from "@playwright/test";
 
 const MAX_MATCHES_PER_SELECTOR = 20;
 
-const ANNOTATION_TYPE = "releasebot-annotate";
+const ANNOTATION_TYPE = "cutter-annotate";
 
 /**
  * Register the selectors whose bounding boxes the harness should record on

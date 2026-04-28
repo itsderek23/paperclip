@@ -27,7 +27,7 @@ export class CalDiyAdapter implements StackAdapter {
     await fs.writeFile(logPath, "");
 
     const dbName = dbNameForHome(homeDir);
-    const adminUrl = process.env.RELEASEBOT_PG_ADMIN_URL ?? ADMIN_URL_DEFAULT;
+    const adminUrl = process.env.CUTTER_PG_ADMIN_URL ?? ADMIN_URL_DEFAULT;
     const dbUrl = replaceDbName(adminUrl, dbName);
 
     await dropDatabase(adminUrl, dbName);
@@ -87,8 +87,8 @@ export class CalDiyAdapter implements StackAdapter {
   }
 
   async provideAuth(baseUrl: string, artifactsDir: string, sideLabel: Side): Promise<AuthContext | undefined> {
-    const email = process.env.RELEASEBOT_CALDIY_USER ?? "pro@example.com";
-    const password = process.env.RELEASEBOT_CALDIY_PASSWORD ?? "pro";
+    const email = process.env.CUTTER_CALDIY_USER ?? "pro@example.com";
+    const password = process.env.CUTTER_CALDIY_PASSWORD ?? "pro";
     const sideDir = path.join(artifactsDir, sideLabel);
     await fs.mkdir(sideDir, { recursive: true });
     const storageStatePath = path.join(sideDir, "storageState.json");
@@ -147,17 +147,17 @@ async function injectTimezoneDialogCookie(storageStatePath: string, baseUrl: str
   await fs.writeFile(storageStatePath, JSON.stringify(state));
 }
 
-const RELEASEBOT_PATCH_MARKER = "// __RELEASEBOT_SKIP_TSC__";
+const CUTTER_PATCH_MARKER = "// __CUTTER_SKIP_TSC__";
 
 async function patchNextConfigSkipTypeCheck(configPath: string): Promise<void> {
   const original = await fs.readFile(configPath, "utf8");
-  if (original.includes(RELEASEBOT_PATCH_MARKER)) return;
+  if (original.includes(CUTTER_PATCH_MARKER)) return;
   const target = "export default (phase: string): NextConfig => plugins.reduce((acc, plugin) => plugin(acc), nextConfig(phase));";
   if (!original.includes(target)) {
     throw new Error(`patchNextConfigSkipTypeCheck: anchor line not found in ${configPath}`);
   }
   const replacement = [
-    RELEASEBOT_PATCH_MARKER,
+    CUTTER_PATCH_MARKER,
     "const __releasebotInner = (phase: string): NextConfig => plugins.reduce((acc, plugin) => plugin(acc), nextConfig(phase));",
     "export default (phase: string): NextConfig => {",
     "  const cfg = __releasebotInner(phase) as NextConfig & { typescript?: Record<string, unknown>; eslint?: Record<string, unknown> };",
